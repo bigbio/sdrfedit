@@ -34,7 +34,7 @@ npm install
 ng serve
 
 # Build for production
-ng build --configuration=production
+npm run build -- --configuration=production
 ```
 
 ### Usage
@@ -42,6 +42,90 @@ ng build --configuration=production
 Open the application in your browser and either:
 - **Load from URL**: Provide a URL to an SDRF file (must support CORS)
 - **Upload File**: Drag and drop or click to upload a local TSV file
+
+## Publishing & Distribution
+
+The SDRF Editor is published as a component via **jsDelivr CDN**, which serves files directly from this GitHub repository. No separate deployment or npm publishing is required.
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  sdrfedit repo (bigbio/sdrfedit)                                │
+│                                                                  │
+│  1. Make changes to src/                                         │
+│  2. npm run build -- --configuration=production                  │
+│  3. git add dist/ && git commit && git push                      │
+│                                                                  │
+│  The dist/ folder is committed to the repo:                      │
+│  dist/sdrf-editor/browser/                                       │
+│  ├── main.js                                                     │
+│  ├── polyfills.js                                                │
+│  └── styles.css                                                  │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+              jsDelivr CDN automatically serves files
+              https://cdn.jsdelivr.net/gh/bigbio/sdrfedit@main/...
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  Any website can embed the editor:                               │
+│                                                                  │
+│  <link href="https://cdn.jsdelivr.net/gh/bigbio/sdrfedit@main/  │
+│              dist/sdrf-editor/browser/styles.css">               │
+│  <script src="https://cdn.jsdelivr.net/gh/bigbio/sdrfedit@main/ │
+│               dist/sdrf-editor/browser/main.js" type="module">   │
+│  <app-root></app-root>                                           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Release Workflow
+
+To publish a new version of the editor:
+
+```bash
+# 1. Make your changes
+# 2. Build the production bundle
+npm run build -- --configuration=production
+
+# 3. Commit the built files
+git add dist/
+git commit -m "Build: update editor bundle"
+
+# 4. Push to main/master
+git push origin main
+```
+
+Once pushed, jsDelivr will automatically serve the new version. Websites using the editor will get the update when they rebuild/redeploy.
+
+### Embedding in Other Websites
+
+To embed the SDRF Editor in any HTML page:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/bigbio/sdrfedit@main/dist/sdrf-editor/browser/styles.css">
+</head>
+<body>
+    <app-root></app-root>
+
+    <script src="https://cdn.jsdelivr.net/gh/bigbio/sdrfedit@main/dist/sdrf-editor/browser/polyfills.js" type="module"></script>
+    <script src="https://cdn.jsdelivr.net/gh/bigbio/sdrfedit@main/dist/sdrf-editor/browser/main.js" type="module"></script>
+</body>
+</html>
+```
+
+### Integration with SDRF Specification Website
+
+The editor is integrated into the SDRF-Proteomics specification website at [sdrf.quantms.org](https://sdrf.quantms.org). See the [proteomics-metadata-standard](https://github.com/bigbio/proteomics-metadata-standard) repository for details.
+
+### jsDelivr Cache
+
+jsDelivr caches files for performance. After pushing changes:
+- Use `@main` for the latest version (cache refreshes within 24 hours)
+- Use `@{commit-hash}` for immediate updates
+- Use `@{tag}` for versioned releases
 
 ## Technology Stack
 

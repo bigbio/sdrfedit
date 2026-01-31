@@ -1,6 +1,6 @@
 # Angular
 .angular/
-dist/
+# dist/ - NOT ignored, committed for jsDelivr CDN
 
 # Node
 node_modules/
@@ -28,7 +28,6 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
