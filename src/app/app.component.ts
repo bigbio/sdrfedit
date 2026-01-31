@@ -4,7 +4,7 @@
  * Main application component that hosts the SDRF editor.
  */
 
-import { Component } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.component';
 
@@ -137,12 +137,22 @@ import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.compon
     }
   `]
 })
-export class AppComponent {
+export class AppComponent implements OnInit {
   sdrfUrl = '';
   activeUrl = '';
 
   // Sample SDRF from proteomics-metadata-standard
   readonly sampleUrl = 'https://raw.githubusercontent.com/bigbio/proteomics-metadata-standard/master/annotated-projects/PXD000612/sdrf.tsv';
+
+  ngOnInit(): void {
+    // Check for URL parameter to auto-load SDRF file
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlParam = urlParams.get('url');
+    if (urlParam) {
+      this.sdrfUrl = urlParam;
+      this.activeUrl = urlParam;
+    }
+  }
 
   loadUrl(): void {
     if (this.sdrfUrl) {
