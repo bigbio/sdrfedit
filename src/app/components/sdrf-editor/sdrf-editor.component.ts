@@ -162,48 +162,52 @@ const BUFFER_ROWS = 10;
             #scrollContainer
             (scroll)="onScroll($event)"
           >
+            <!-- Sticky header table (outside transform for proper sticky behavior) -->
+            <table class="sdrf-table sdrf-header-table">
+              <thead>
+                <tr>
+                  <th class="row-header checkbox-col">
+                    <input
+                      type="checkbox"
+                      [checked]="isAllVisibleSelected()"
+                      [indeterminate]="isSomeVisibleSelected()"
+                      (change)="toggleSelectAllVisible()"
+                      title="Select all visible rows"
+                    />
+                  </th>
+                  <th class="row-header">#</th>
+                  @for (column of table()!.columns; track column.columnPosition) {
+                    <th
+                      [class]="'col-type-' + getColumnTypeClass(column.name)"
+                      [class.required]="column.isRequired"
+                      [class.selected]="selectedCell()?.col === column.columnPosition"
+                      [class.sorted]="sortColumn() === column.columnPosition"
+                      (click)="onHeaderClick(column.columnPosition, $event)"
+                    >
+                      <span class="col-type-indicator"></span>
+                      <span class="col-name">{{ column.name }}</span>
+                      @if (column.isRequired) {
+                        <span class="required-marker">*</span>
+                      }
+                      @if (sortColumn() === column.columnPosition) {
+                        <span class="sort-indicator">{{ sortDirection() === 'asc' ? '▲' : '▼' }}</span>
+                      }
+                    </th>
+                  }
+                </tr>
+              </thead>
+            </table>
+
             <!-- Spacer for total scroll height -->
             <div
               class="scroll-spacer"
               [style.height.px]="totalHeight()"
             >
-              <!-- Table positioned at scroll offset -->
+              <!-- Body table positioned at scroll offset -->
               <table
-                class="sdrf-table"
+                class="sdrf-table sdrf-body-table"
                 [style.transform]="'translateY(' + tableOffset() + 'px)'"
               >
-                <thead>
-                  <tr>
-                    <th class="row-header checkbox-col">
-                      <input
-                        type="checkbox"
-                        [checked]="isAllVisibleSelected()"
-                        [indeterminate]="isSomeVisibleSelected()"
-                        (change)="toggleSelectAllVisible()"
-                        title="Select all visible rows"
-                      />
-                    </th>
-                    <th class="row-header">#</th>
-                    @for (column of table()!.columns; track column.columnPosition) {
-                      <th
-                        [class]="'col-type-' + getColumnTypeClass(column.name)"
-                        [class.required]="column.isRequired"
-                        [class.selected]="selectedCell()?.col === column.columnPosition"
-                        [class.sorted]="sortColumn() === column.columnPosition"
-                        (click)="onHeaderClick(column.columnPosition, $event)"
-                      >
-                        <span class="col-type-indicator"></span>
-                        <span class="col-name">{{ column.name }}</span>
-                        @if (column.isRequired) {
-                          <span class="required-marker">*</span>
-                        }
-                        @if (sortColumn() === column.columnPosition) {
-                          <span class="sort-indicator">{{ sortDirection() === 'asc' ? '▲' : '▼' }}</span>
-                        }
-                      </th>
-                    }
-                  </tr>
-                </thead>
                 <tbody>
                   @for (rowIndex of visibleRows(); track rowIndex) {
                     <tr
@@ -560,6 +564,21 @@ const BUFFER_ROWS = 10;
       border-collapse: collapse;
       font-size: 13px;
       position: relative;
+      table-layout: fixed;
+      width: max-content;
+      min-width: 100%;
+    }
+
+    /* Sticky header table - stays at top during scroll */
+    .sdrf-header-table {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: #f8f9fa;
+    }
+
+    /* Body table uses transform for virtual scrolling */
+    .sdrf-body-table {
       will-change: transform;
     }
 
@@ -569,6 +588,7 @@ const BUFFER_ROWS = 10;
       padding: 6px 8px;
       text-align: left;
       white-space: nowrap;
+      min-width: 100px;
       max-width: 300px;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -579,9 +599,6 @@ const BUFFER_ROWS = 10;
     .sdrf-table th {
       background: #f8f9fa;
       font-weight: 600;
-      position: sticky;
-      top: 0;
-      z-index: 10;
     }
 
     .sdrf-table th.required {
@@ -597,14 +614,29 @@ const BUFFER_ROWS = 10;
       background: #f8f9fa;
       font-weight: 500;
       text-align: center;
+      width: 60px;
       min-width: 60px;
+      max-width: 60px;
       position: sticky;
       left: 0;
       z-index: 5;
     }
 
-    thead .row-header {
-      z-index: 15;
+    .sdrf-header-table .row-header {
+      z-index: 25;
+    }
+
+    .checkbox-col {
+      width: 32px;
+      min-width: 32px;
+      max-width: 32px;
+      text-align: center;
+      padding: 4px !important;
+    }
+
+    .checkbox-col input[type="checkbox"] {
+      margin: 0;
+      cursor: pointer;
     }
 
     .sdrf-table td.selected,
@@ -789,9 +821,6 @@ const BUFFER_ROWS = 10;
     }
 
     .sdrf-table th {
-      position: sticky;
-      top: 0;
-      z-index: 10;
       padding-left: 10px;
     }
 
@@ -863,19 +892,6 @@ const BUFFER_ROWS = 10;
 
     .sdrf-content.with-sidebar .sdrf-table-container {
       flex: 1;
-    }
-
-    .checkbox-col {
-      width: 32px;
-      min-width: 32px;
-      max-width: 32px;
-      text-align: center;
-      padding: 4px !important;
-    }
-
-    .checkbox-col input[type="checkbox"] {
-      margin: 0;
-      cursor: pointer;
     }
 
     tr.row-selected td {
