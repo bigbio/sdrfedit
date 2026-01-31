@@ -36,6 +36,9 @@ import { SdrfCellEditorComponent } from '../sdrf-cell-editor/sdrf-cell-editor.co
 import { SdrfColumnStatsComponent, SelectByValueEvent, BulkEditEvent } from '../sdrf-column-stats/sdrf-column-stats.component';
 import { SdrfBulkToolbarComponent, BulkColumnEditEvent } from '../sdrf-bulk-toolbar/sdrf-bulk-toolbar.component';
 import { SdrfFilterBarComponent, FilterResult } from '../sdrf-filter-bar/sdrf-filter-bar.component';
+import { SdrfRecommendPanelComponent, ApplyRecommendationEvent, BatchApplyEvent } from '../sdrf-recommend-panel/sdrf-recommend-panel.component';
+import { LlmSettingsDialogComponent } from '../llm-settings/llm-settings-dialog.component';
+import { SdrfRecommendation } from '../../core/models/llm';
 
 /**
  * Cell selection state.
@@ -54,7 +57,7 @@ const BUFFER_ROWS = 10;
 @Component({
   selector: 'sdrf-editor',
   standalone: true,
-  imports: [CommonModule, FormsModule, SdrfCellEditorComponent, SdrfColumnStatsComponent, SdrfBulkToolbarComponent, SdrfFilterBarComponent],
+  imports: [CommonModule, FormsModule, SdrfCellEditorComponent, SdrfColumnStatsComponent, SdrfBulkToolbarComponent, SdrfFilterBarComponent, SdrfRecommendPanelComponent, LlmSettingsDialogComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="sdrf-editor" [class.loading]="loading()">
@@ -95,6 +98,14 @@ const BUFFER_ROWS = 10;
               title="Show column statistics"
             >
               Stats
+            </button>
+            <button
+              class="btn btn-ai"
+              [class.btn-active]="showRecommendPanel()"
+              (click)="toggleRecommendPanel()"
+              title="AI-powered recommendations"
+            >
+              AI Assistant
             </button>
           }
         </div>
@@ -155,7 +166,7 @@ const BUFFER_ROWS = 10;
 
       <!-- Main content -->
       @if (table()) {
-        <div class="sdrf-content" [class.with-sidebar]="showStatsPanel()">
+        <div class="sdrf-content" [class.with-sidebar]="showStatsPanel() || showRecommendPanel()">
           <!-- Virtual scrolling table container -->
           <div
             class="sdrf-table-container"
@@ -373,12 +384,32 @@ const BUFFER_ROWS = 10;
               (selectSamples)="onSelectSamples($event)"
             ></sdrf-column-stats>
           }
+
+          <!-- AI Recommend Panel Sidebar -->
+          @if (showRecommendPanel()) {
+            <sdrf-recommend-panel
+              [table]="table()"
+              (close)="toggleRecommendPanel()"
+              (openSettings)="openLlmSettings()"
+              (applyRecommendation)="onApplyRecommendation($event)"
+              (batchApply)="onBatchApplyRecommendations($event)"
+              (previewRecommendation)="onPreviewRecommendation($event)"
+            ></sdrf-recommend-panel>
+          }
         </div>
       } @else if (!loading() && !error()) {
         <div class="empty-state">
           <p>No SDRF file loaded</p>
           <p class="hint">Import a file or provide a URL to get started</p>
         </div>
+      }
+
+      <!-- LLM Settings Dialog -->
+      @if (showLlmSettingsDialog()) {
+        <llm-settings-dialog
+          (close)="closeLlmSettings()"
+          (settingsSaved)="onLlmSettingsSaved()"
+        ></llm-settings-dialog>
       }
     </div>
   `,
@@ -857,6 +888,22 @@ const BUFFER_ROWS = 10;
       color: #1976d2 !important;
     }
 
+    .btn-ai {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border-color: #667eea;
+    }
+
+    .btn-ai:hover {
+      background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+    }
+
+    .btn-ai.btn-active {
+      background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%) !important;
+      border-color: #5a67d8 !important;
+      box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.3);
+    }
+
     .sdrf-content.with-sidebar {
       flex-direction: row;
     }
@@ -991,6 +1038,12 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   /** Whether stats panel is visible */
   showStatsPanel = signal(false);
+
+  /** Whether AI recommend panel is visible */
+  showRecommendPanel = signal(false);
+
+  /** Whether LLM settings dialog is visible */
+  showLlmSettingsDialog = signal(false);
 
   /** Context menu state */
   contextMenu = signal<{ x: number; y: number; row: number; col: number } | null>(null);
@@ -1449,6 +1502,53 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   toggleStatsPanel(): void {
     this.showStatsPanel.set(!this.showStatsPanel());
+  }
+
+  toggleRecommendPanel(): void {
+    this.showRecommendPanel.set(!this.showRecommendPanel());
+  }
+
+  openLlmSettings(): void {
+    this.showLlmSettingsDialog.set(true);
+  }
+
+  closeLlmSettings(): void {
+    this.showLlmSettingsDialog.set(false);
+  }
+
+  onLlmSettingsSaved(): void {
+    // Settings were saved, panel can now use the new configuration
+    console.log('LLM settings saved');
+  }
+
+  onApplyRecommendation(event: ApplyRecommendationEvent): void {
+    const rec = event.recommendation;
+    this.applyRecommendationToTable(rec);
+  }
+
+  onBatchApplyRecommendations(event: BatchApplyEvent): void {
+    for (const rec of event.recommendations) {
+      this.applyRecommendationToTable(rec);
+    }
+    console.log(`Applied ${event.recommendations.length} recommendations`);
+  }
+
+  onPreviewRecommendation(rec: SdrfRecommendation): void {
+    // Jump to the first affected sample and select the column
+    if (rec.sampleIndices.length > 0) {
+      const sampleIndex = rec.sampleIndices[0];
+      this.jumpToRowInput = sampleIndex;
+      this.jumpToRow();
+      this.selectCell(sampleIndex, rec.columnIndex);
+    }
+  }
+
+  private applyRecommendationToTable(rec: SdrfRecommendation): void {
+    // Apply the recommendation value to all affected samples
+    for (const sampleIndex of rec.sampleIndices) {
+      this.setCellValue(sampleIndex, rec.columnIndex, rec.suggestedValue);
+    }
+    console.log(`Applied recommendation to ${rec.column}: "${rec.suggestedValue}" for ${rec.sampleIndices.length} samples`);
   }
 
   isRowSelected(rowIndex: number): boolean {
