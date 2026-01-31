@@ -155,13 +155,15 @@ const BUFFER_ROWS = 10;
 
       <!-- Main content -->
       @if (table()) {
-        <div class="sdrf-content" [class.with-sidebar]="showStatsPanel()">
-          <!-- Virtual scrolling table container -->
-          <div
-            class="sdrf-table-container"
-            #scrollContainer
-            (scroll)="onScroll($event)"
-          >
+        <div class="sdrf-content">
+          <!-- Table and sidebar row -->
+          <div class="table-row" [class.with-sidebar]="showStatsPanel()">
+            <!-- Virtual scrolling table container -->
+            <div
+              class="sdrf-table-container"
+              #scrollContainer
+              (scroll)="onScroll($event)"
+            >
             <!-- Sticky header table (outside transform for proper sticky behavior) -->
             <table class="sdrf-table sdrf-header-table">
               <thead>
@@ -270,6 +272,19 @@ const BUFFER_ROWS = 10;
             }
           </div>
 
+          <!-- Stats Panel Sidebar -->
+          @if (showStatsPanel()) {
+            <sdrf-column-stats
+              [table]="table()"
+              [selectedSamples]="selectedSamples()"
+              (close)="toggleStatsPanel()"
+              (selectByValue)="onSelectByValue($event)"
+              (bulkEdit)="onStatsPanelBulkEdit($event)"
+              (selectSamples)="onSelectSamples($event)"
+            ></sdrf-column-stats>
+          }
+        </div>
+
           <!-- Jump to row control -->
           <div class="jump-to-row">
             <label>
@@ -365,18 +380,6 @@ const BUFFER_ROWS = 10;
               </button>
             </div>
           }
-
-          <!-- Stats Panel Sidebar -->
-          @if (showStatsPanel()) {
-            <sdrf-column-stats
-              [table]="table()"
-              [selectedSamples]="selectedSamples()"
-              (close)="toggleStatsPanel()"
-              (selectByValue)="onSelectByValue($event)"
-              (bulkEdit)="onStatsPanelBulkEdit($event)"
-              (selectSamples)="onSelectSamples($event)"
-            ></sdrf-column-stats>
-          }
         </div>
       } @else if (!loading() && !error()) {
         <div class="empty-state">
@@ -387,12 +390,26 @@ const BUFFER_ROWS = 10;
     </div>
   `,
   styles: [`
+    :host {
+      display: block;
+      height: 100%;
+      overflow: hidden;
+    }
+
     .sdrf-editor {
       display: flex;
       flex-direction: column;
       height: 100%;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 14px;
+      overflow: hidden;
+    }
+
+    /* Ensure child components don't expand beyond their content */
+    sdrf-bulk-toolbar,
+    sdrf-filter-bar {
+      display: block;
+      flex-shrink: 0;
     }
 
     .sdrf-toolbar {
@@ -545,6 +562,27 @@ const BUFFER_ROWS = 10;
       flex: 1;
       overflow: hidden;
       min-height: 0;
+    }
+
+    .table-row {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .table-row.with-sidebar {
+      flex-direction: row;
+    }
+
+    .table-row.with-sidebar .sdrf-table-container {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .table-row.with-sidebar sdrf-column-stats {
+      flex-shrink: 0;
     }
 
     .sdrf-table-container {
@@ -886,13 +924,6 @@ const BUFFER_ROWS = 10;
       color: #1976d2 !important;
     }
 
-    .sdrf-content.with-sidebar {
-      flex-direction: row;
-    }
-
-    .sdrf-content.with-sidebar .sdrf-table-container {
-      flex: 1;
-    }
 
     tr.row-selected td {
       background: #e8f5e9 !important;
