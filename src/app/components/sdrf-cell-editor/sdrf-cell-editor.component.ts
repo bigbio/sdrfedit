@@ -171,29 +171,44 @@ const ONTOLOGY_COLUMNS = [
         }
       </div>
 
-      <!-- Special value options -->
-      @if (showSpecialOptions()) {
-        <div class="special-options">
-          @if (column?.notApplicable) {
-            <button
-              class="special-btn"
-              [class.active]="value === 'not applicable'"
-              (click)="setSpecialValue('not applicable')"
-            >
-              N/A
-            </button>
-          }
-          @if (column?.notAvailable) {
-            <button
-              class="special-btn"
-              [class.active]="value === 'not available'"
-              (click)="setSpecialValue('not available')"
-            >
-              N/Avail
-            </button>
-          }
+      <!-- Reserved value options (valid SDRF placeholders) -->
+      <div class="reserved-options">
+        <span class="reserved-label">Reserved values:</span>
+        <div class="reserved-btns">
+          <button
+            class="reserved-btn not-available"
+            [class.active]="value.toLowerCase() === 'not available'"
+            (click)="setSpecialValue('not available')"
+            title="Value is not available - data was not collected or cannot be determined"
+          >
+            not available
+          </button>
+          <button
+            class="reserved-btn not-applicable"
+            [class.active]="value.toLowerCase() === 'not applicable'"
+            (click)="setSpecialValue('not applicable')"
+            title="Value is not applicable - does not apply to this sample type"
+          >
+            not applicable
+          </button>
+          <button
+            class="reserved-btn anonymized"
+            [class.active]="value.toLowerCase() === 'anonymized'"
+            (click)="setSpecialValue('anonymized')"
+            title="Value is anonymized - hidden for privacy/ethical reasons"
+          >
+            anonymized
+          </button>
+          <button
+            class="reserved-btn pooled"
+            [class.active]="value.toLowerCase() === 'pooled'"
+            (click)="setSpecialValue('pooled')"
+            title="Value is pooled - sample is a pool of multiple sources"
+          >
+            pooled
+          </button>
         </div>
-      }
+      </div>
     </div>
   `,
   styles: [`
@@ -335,30 +350,91 @@ const ONTOLOGY_COLUMNS = [
       text-decoration: underline;
     }
 
-    .special-options {
+    .reserved-options {
       display: flex;
-      gap: 8px;
-      padding-top: 8px;
+      flex-direction: column;
+      gap: 6px;
+      padding-top: 10px;
+      border-top: 1px dashed #ddd;
+      margin-top: 4px;
     }
 
-    .special-btn {
+    .reserved-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #888;
+    }
+
+    .reserved-btns {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .reserved-btn {
       padding: 4px 8px;
       font-size: 11px;
-      background: #f5f5f5;
-      border: 1px solid #ddd;
+      font-style: italic;
+      background: #f8f8f8;
+      border: 1px solid #e0e0e0;
       border-radius: 4px;
       cursor: pointer;
+      color: #888;
+      transition: all 0.15s ease;
+    }
+
+    .reserved-btn:hover {
+      background: #f0f0f0;
+      border-color: #ccc;
+    }
+
+    /* Not available / not applicable - muted gray */
+    .reserved-btn.not-available,
+    .reserved-btn.not-applicable {
+      color: #888;
+    }
+
+    .reserved-btn.not-available:hover,
+    .reserved-btn.not-applicable:hover {
+      background: rgba(158, 158, 158, 0.15);
+    }
+
+    .reserved-btn.not-available.active,
+    .reserved-btn.not-applicable.active {
+      background: rgba(158, 158, 158, 0.2);
+      border-color: #9e9e9e;
       color: #666;
     }
 
-    .special-btn:hover {
-      background: #e0e0e0;
+    /* Anonymized - purple tint */
+    .reserved-btn.anonymized {
+      color: #9c27b0;
     }
 
-    .special-btn.active {
-      background: #fff3e0;
-      border-color: #ffb74d;
-      color: #e65100;
+    .reserved-btn.anonymized:hover {
+      background: rgba(156, 39, 176, 0.1);
+    }
+
+    .reserved-btn.anonymized.active {
+      background: rgba(156, 39, 176, 0.15);
+      border-color: #9c27b0;
+      color: #7b1fa2;
+    }
+
+    /* Pooled - blue tint */
+    .reserved-btn.pooled {
+      color: #1976d2;
+    }
+
+    .reserved-btn.pooled:hover {
+      background: rgba(33, 150, 243, 0.1);
+    }
+
+    .reserved-btn.pooled.active {
+      background: rgba(33, 150, 243, 0.15);
+      border-color: #2196f3;
+      color: #1565c0;
     }
   `],
 })
@@ -464,10 +540,6 @@ export class SdrfCellEditorComponent implements OnInit, OnChanges, AfterViewInit
 
   canClear(): boolean {
     return this.value !== '';
-  }
-
-  showSpecialOptions(): boolean {
-    return !!(this.column?.notApplicable || this.column?.notAvailable);
   }
 
   toggleExpand(): void {

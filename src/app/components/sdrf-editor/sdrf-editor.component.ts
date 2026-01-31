@@ -230,7 +230,14 @@ const BUFFER_ROWS = 10;
                           (dblclick)="startEditing(rowIndex, column.columnPosition)"
                           (contextmenu)="onCellContextMenu($event, rowIndex, column.columnPosition)"
                         >
-                          <span class="cell-value">
+                          <span
+                            class="cell-value"
+                            [class.reserved-value]="isReservedValue(getCellValue(rowIndex, column.columnPosition))"
+                            [class.reserved-not-available]="isReservedValueType(getCellValue(rowIndex, column.columnPosition), 'not available')"
+                            [class.reserved-not-applicable]="isReservedValueType(getCellValue(rowIndex, column.columnPosition), 'not applicable')"
+                            [class.reserved-anonymized]="isReservedValueType(getCellValue(rowIndex, column.columnPosition), 'anonymized')"
+                            [class.reserved-pooled]="isReservedValueType(getCellValue(rowIndex, column.columnPosition), 'pooled')"
+                          >
                             {{ getCellValue(rowIndex, column.columnPosition) }}
                           </span>
                         </td>
@@ -614,6 +621,49 @@ const BUFFER_ROWS = 10;
     .cell-value {
       display: block;
       min-height: 1em;
+    }
+
+    /* Reserved value styling - muted appearance to indicate valid but placeholder values */
+    .cell-value.reserved-value {
+      color: #9e9e9e;
+      font-style: italic;
+    }
+
+    /* Specific reserved value types with visible background */
+    .cell-value.reserved-not-available {
+      color: #757575;
+      font-style: italic;
+      background: #f5f5f5;
+      border-radius: 3px;
+      padding: 2px 6px;
+      margin: -2px -6px;
+    }
+
+    .cell-value.reserved-not-applicable {
+      color: #757575;
+      font-style: italic;
+      background: #f5f5f5;
+      border-radius: 3px;
+      padding: 2px 6px;
+      margin: -2px -6px;
+    }
+
+    .cell-value.reserved-anonymized {
+      color: #7b1fa2;
+      font-style: italic;
+      background: #f3e5f5;
+      border-radius: 3px;
+      padding: 2px 6px;
+      margin: -2px -6px;
+    }
+
+    .cell-value.reserved-pooled {
+      color: #1565c0;
+      font-style: italic;
+      background: #e3f2fd;
+      border-radius: 3px;
+      padding: 2px 6px;
+      margin: -2px -6px;
     }
 
     .cell-editor-popup {
@@ -1342,6 +1392,33 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
     return result.errors.some(
       (e) => e.column?.toLowerCase() === column.name.toLowerCase() && (!e.row || e.row === row)
     );
+  }
+
+  /**
+   * Reserved SDRF values that are valid but indicate missing/special data.
+   */
+  private readonly RESERVED_VALUES = [
+    'not available',
+    'not applicable',
+    'anonymized',
+    'pooled'
+  ];
+
+  /**
+   * Checks if a cell value is a reserved SDRF value.
+   */
+  isReservedValue(value: string): boolean {
+    if (!value) return false;
+    const lower = value.toLowerCase().trim();
+    return this.RESERVED_VALUES.includes(lower);
+  }
+
+  /**
+   * Checks if a cell value matches a specific reserved value type.
+   */
+  isReservedValueType(value: string, type: string): boolean {
+    if (!value) return false;
+    return value.toLowerCase().trim() === type.toLowerCase();
   }
 
   private updateContainerHeight(): void {

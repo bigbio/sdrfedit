@@ -327,15 +327,19 @@ export class SdrfParserService {
         value = value.trim();
       }
 
-      // Track special values
+      // Track special/reserved values (but still store them for display)
       const lower = value.toLowerCase();
       if (lower === 'not applicable') {
         hasNotApplicable = true;
-        return;
       }
       if (lower === 'not available') {
         hasNotAvailable = true;
-        return;
+      }
+      if (lower === 'anonymized') {
+        // Track anonymized values
+      }
+      if (lower === 'pooled') {
+        // Track pooled values
       }
 
       if (value === '') {
