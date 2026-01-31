@@ -118,6 +118,9 @@ const BUFFER_ROWS = 10;
               <span class="legend-item characteristic">Characteristics</span>
               <span class="legend-item factor">Factor Values</span>
               <span class="legend-item comment">Comments</span>
+              <span class="legend-item data">Data</span>
+              <span class="legend-item technical">Technical</span>
+              <span class="legend-item other">Other</span>
             </div>
             <span class="table-info">
               {{ table()!.columns.length }} columns,
@@ -166,55 +169,61 @@ const BUFFER_ROWS = 10;
 
       <!-- Main content -->
       @if (table()) {
-        <div class="sdrf-content" [class.with-sidebar]="showStatsPanel() || showRecommendPanel()">
-          <!-- Virtual scrolling table container -->
-          <div
-            class="sdrf-table-container"
-            #scrollContainer
-            (scroll)="onScroll($event)"
-          >
+        <div class="sdrf-content">
+          <!-- Table and sidebar row -->
+          <div class="table-row" [class.with-sidebar]="showStatsPanel() || showRecommendPanel()">
+            <!-- Virtual scrolling table container -->
+            <div
+              class="sdrf-table-container"
+              #scrollContainer
+              (scroll)="onScroll($event)"
+            >
+            <!-- Sticky header table (outside transform for proper sticky behavior) -->
+            <table class="sdrf-table sdrf-header-table">
+              <thead>
+                <tr>
+                  <th class="row-header checkbox-col">
+                    <input
+                      type="checkbox"
+                      [checked]="isAllVisibleSelected()"
+                      [indeterminate]="isSomeVisibleSelected()"
+                      (change)="toggleSelectAllVisible()"
+                      title="Select all visible rows"
+                    />
+                  </th>
+                  <th class="row-header">#</th>
+                  @for (column of table()!.columns; track column.columnPosition) {
+                    <th
+                      [class]="'col-type-' + getColumnTypeClass(column.name)"
+                      [class.required]="column.isRequired"
+                      [class.selected]="selectedCell()?.col === column.columnPosition"
+                      [class.sorted]="sortColumn() === column.columnPosition"
+                      (click)="onHeaderClick(column.columnPosition, $event)"
+                    >
+                      <span class="col-type-indicator"></span>
+                      <span class="col-name">{{ column.name }}</span>
+                      @if (column.isRequired) {
+                        <span class="required-marker">*</span>
+                      }
+                      @if (sortColumn() === column.columnPosition) {
+                        <span class="sort-indicator">{{ sortDirection() === 'asc' ? '▲' : '▼' }}</span>
+                      }
+                    </th>
+                  }
+                </tr>
+              </thead>
+            </table>
+
             <!-- Spacer for total scroll height -->
             <div
               class="scroll-spacer"
               [style.height.px]="totalHeight()"
             >
-              <!-- Table positioned at scroll offset -->
+              <!-- Body table positioned at scroll offset -->
               <table
-                class="sdrf-table"
+                class="sdrf-table sdrf-body-table"
                 [style.transform]="'translateY(' + tableOffset() + 'px)'"
               >
-                <thead>
-                  <tr>
-                    <th class="row-header checkbox-col">
-                      <input
-                        type="checkbox"
-                        [checked]="isAllVisibleSelected()"
-                        [indeterminate]="isSomeVisibleSelected()"
-                        (change)="toggleSelectAllVisible()"
-                        title="Select all visible rows"
-                      />
-                    </th>
-                    <th class="row-header">#</th>
-                    @for (column of table()!.columns; track column.columnPosition) {
-                      <th
-                        [class]="'col-type-' + getColumnTypeClass(column.name)"
-                        [class.required]="column.isRequired"
-                        [class.selected]="selectedCell()?.col === column.columnPosition"
-                        [class.sorted]="sortColumn() === column.columnPosition"
-                        (click)="onHeaderClick(column.columnPosition, $event)"
-                      >
-                        <span class="col-type-indicator"></span>
-                        <span class="col-name">{{ column.name }}</span>
-                        @if (column.isRequired) {
-                          <span class="required-marker">*</span>
-                        }
-                        @if (sortColumn() === column.columnPosition) {
-                          <span class="sort-indicator">{{ sortDirection() === 'asc' ? '▲' : '▼' }}</span>
-                        }
-                      </th>
-                    }
-                  </tr>
-                </thead>
                 <tbody>
                   @for (rowIndex of visibleRows(); track rowIndex) {
                     <tr
@@ -259,23 +268,20 @@ const BUFFER_ROWS = 10;
               </table>
             </div>
 
-            <!-- Cell editor popup -->
-            @if (editingCell() && editingColumn()) {
-              <div
-                class="cell-editor-popup"
-                [style.top.px]="editorPosition().top"
-                [style.left.px]="editorPosition().left"
-              >
-                <sdrf-cell-editor
-                  [value]="getCellValue(editingCell()!.row, editingCell()!.col)"
-                  [column]="editingColumn()!"
-                  [rowIndex]="editingCell()!.row"
-                  (save)="onCellEditorSave($event)"
-                  (cancel)="cancelEditing()"
-                ></sdrf-cell-editor>
-              </div>
-            }
           </div>
+
+          <!-- Stats Panel Sidebar -->
+          @if (showStatsPanel()) {
+            <sdrf-column-stats
+              [table]="table()"
+              [selectedSamples]="selectedSamples()"
+              (close)="toggleStatsPanel()"
+              (selectByValue)="onSelectByValue($event)"
+              (bulkEdit)="onStatsPanelBulkEdit($event)"
+              (selectSamples)="onSelectSamples($event)"
+            ></sdrf-column-stats>
+          }
+        </div>
 
           <!-- Jump to row control -->
           <div class="jump-to-row">
@@ -373,18 +379,6 @@ const BUFFER_ROWS = 10;
             </div>
           }
 
-          <!-- Stats Panel Sidebar -->
-          @if (showStatsPanel()) {
-            <sdrf-column-stats
-              [table]="table()"
-              [selectedSamples]="selectedSamples()"
-              (close)="toggleStatsPanel()"
-              (selectByValue)="onSelectByValue($event)"
-              (bulkEdit)="onStatsPanelBulkEdit($event)"
-              (selectSamples)="onSelectSamples($event)"
-            ></sdrf-column-stats>
-          }
-
           <!-- AI Recommend Panel Sidebar -->
           @if (showRecommendPanel()) {
             <sdrf-recommend-panel
@@ -404,6 +398,30 @@ const BUFFER_ROWS = 10;
         </div>
       }
 
+      <!-- Cell editor popup (fixed position, stays in viewport) -->
+      @if (editingCell() && editingColumn()) {
+        <div
+          class="cell-editor-popup"
+          [style.top.px]="editorPosition().top"
+          [style.left.px]="editorPosition().left"
+        >
+          <div class="cell-editor-context">
+            <span class="context-info">
+              Editing Row <strong>{{ editingCell()!.row }}</strong>,
+              Column: <strong>{{ editingColumn()!.name }}</strong>
+            </span>
+            <button class="btn-close" (click)="cancelEditing()" title="Close">×</button>
+          </div>
+          <sdrf-cell-editor
+            [value]="getCellValue(editingCell()!.row, editingCell()!.col)"
+            [column]="editingColumn()!"
+            [rowIndex]="editingCell()!.row"
+            (save)="onCellEditorSave($event)"
+            (cancel)="cancelEditing()"
+          ></sdrf-cell-editor>
+        </div>
+      }
+
       <!-- LLM Settings Dialog -->
       @if (showLlmSettingsDialog()) {
         <llm-settings-dialog
@@ -414,12 +432,26 @@ const BUFFER_ROWS = 10;
     </div>
   `,
   styles: [`
+    :host {
+      display: block;
+      height: 100%;
+      overflow: hidden;
+    }
+
     .sdrf-editor {
       display: flex;
       flex-direction: column;
       height: 100%;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 14px;
+      overflow: hidden;
+    }
+
+    /* Ensure child components don't expand beyond their content */
+    sdrf-bulk-toolbar,
+    sdrf-filter-bar {
+      display: block;
+      flex-shrink: 0;
     }
 
     .sdrf-toolbar {
@@ -522,6 +554,21 @@ const BUFFER_ROWS = 10;
       background: rgba(158, 158, 158, 0.1);
     }
 
+    .legend-item.data {
+      border-left-color: #009688;
+      background: rgba(0, 150, 136, 0.1);
+    }
+
+    .legend-item.technical {
+      border-left-color: #607d8b;
+      background: rgba(96, 125, 139, 0.1);
+    }
+
+    .legend-item.other {
+      border-left-color: #8d6e63;
+      background: rgba(141, 110, 99, 0.1);
+    }
+
     .loading-overlay {
       display: flex;
       flex-direction: column;
@@ -574,6 +621,27 @@ const BUFFER_ROWS = 10;
       min-height: 0;
     }
 
+    .table-row {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .table-row.with-sidebar {
+      flex-direction: row;
+    }
+
+    .table-row.with-sidebar .sdrf-table-container {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .table-row.with-sidebar sdrf-column-stats {
+      flex-shrink: 0;
+    }
+
     .sdrf-table-container {
       flex: 1;
       overflow: auto;
@@ -591,6 +659,21 @@ const BUFFER_ROWS = 10;
       border-collapse: collapse;
       font-size: 13px;
       position: relative;
+      table-layout: fixed;
+      width: max-content;
+      min-width: 100%;
+    }
+
+    /* Sticky header table - stays at top during scroll */
+    .sdrf-header-table {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: #f8f9fa;
+    }
+
+    /* Body table uses transform for virtual scrolling */
+    .sdrf-body-table {
       will-change: transform;
     }
 
@@ -600,6 +683,7 @@ const BUFFER_ROWS = 10;
       padding: 6px 8px;
       text-align: left;
       white-space: nowrap;
+      min-width: 100px;
       max-width: 300px;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -610,9 +694,6 @@ const BUFFER_ROWS = 10;
     .sdrf-table th {
       background: #f8f9fa;
       font-weight: 600;
-      position: sticky;
-      top: 0;
-      z-index: 10;
     }
 
     .sdrf-table th.required {
@@ -628,14 +709,29 @@ const BUFFER_ROWS = 10;
       background: #f8f9fa;
       font-weight: 500;
       text-align: center;
+      width: 60px;
       min-width: 60px;
+      max-width: 60px;
       position: sticky;
       left: 0;
       z-index: 5;
     }
 
-    thead .row-header {
-      z-index: 15;
+    .sdrf-header-table .row-header {
+      z-index: 25;
+    }
+
+    .checkbox-col {
+      width: 32px;
+      min-width: 32px;
+      max-width: 32px;
+      text-align: center;
+      padding: 4px !important;
+    }
+
+    .checkbox-col input[type="checkbox"] {
+      margin: 0;
+      cursor: pointer;
     }
 
     .sdrf-table td.selected,
@@ -698,9 +794,49 @@ const BUFFER_ROWS = 10;
     }
 
     .cell-editor-popup {
-      position: absolute;
-      z-index: 100;
+      position: fixed;
+      z-index: 1000;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
       animation: fadeIn 0.15s ease-out;
+      max-width: 400px;
+      max-height: 80vh;
+      overflow: auto;
+    }
+
+    .cell-editor-context {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: #1a237e;
+      color: white;
+      border-radius: 8px 8px 0 0;
+      font-size: 12px;
+    }
+
+    .cell-editor-context .context-info {
+      flex: 1;
+    }
+
+    .cell-editor-context strong {
+      color: #90caf9;
+    }
+
+    .cell-editor-context .btn-close {
+      background: none;
+      border: none;
+      color: white;
+      font-size: 18px;
+      cursor: pointer;
+      padding: 0 4px;
+      margin-left: 8px;
+      opacity: 0.8;
+    }
+
+    .cell-editor-context .btn-close:hover {
+      opacity: 1;
     }
 
     @keyframes fadeIn {
@@ -820,9 +956,6 @@ const BUFFER_ROWS = 10;
     }
 
     .sdrf-table th {
-      position: sticky;
-      top: 0;
-      z-index: 10;
       padding-left: 10px;
     }
 
@@ -830,11 +963,11 @@ const BUFFER_ROWS = 10;
       display: inline;
     }
 
-    /* Source Name - Green */
+    /* Source Name / Sample Name - Green */
     .col-type-source .col-type-indicator { background: #4caf50; }
     .col-type-source { border-left: 3px solid #4caf50; }
 
-    /* Assay Name - Purple */
+    /* Assay Name / MS Run - Purple */
     .col-type-assay .col-type-indicator { background: #9c27b0; }
     .col-type-assay { border-left: 3px solid #9c27b0; }
 
@@ -850,13 +983,17 @@ const BUFFER_ROWS = 10;
     .col-type-comment .col-type-indicator { background: #9e9e9e; }
     .col-type-comment { border-left: 3px solid #9e9e9e; }
 
-    /* Technology Type & Special - Blue Gray */
-    .col-type-special .col-type-indicator { background: #607d8b; }
-    .col-type-special { border-left: 3px solid #607d8b; }
+    /* Data/File columns - Teal */
+    .col-type-data .col-type-indicator { background: #009688; }
+    .col-type-data { border-left: 3px solid #009688; }
 
-    /* Other/Unknown */
-    .col-type-other .col-type-indicator { background: #bdbdbd; }
-    .col-type-other { border-left: 3px solid #bdbdbd; }
+    /* Technical/Protocol columns - Blue Gray */
+    .col-type-technical .col-type-indicator { background: #607d8b; }
+    .col-type-technical { border-left: 3px solid #607d8b; }
+
+    /* Other/Unknown - Brown/Tan (distinct from gray) */
+    .col-type-other .col-type-indicator { background: #8d6e63; }
+    .col-type-other { border-left: 3px solid #8d6e63; }
 
     /* Sort indicator */
     .sort-indicator {
@@ -902,27 +1039,6 @@ const BUFFER_ROWS = 10;
       background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%) !important;
       border-color: #5a67d8 !important;
       box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.3);
-    }
-
-    .sdrf-content.with-sidebar {
-      flex-direction: row;
-    }
-
-    .sdrf-content.with-sidebar .sdrf-table-container {
-      flex: 1;
-    }
-
-    .checkbox-col {
-      width: 32px;
-      min-width: 32px;
-      max-width: 32px;
-      text-align: center;
-      padding: 4px !important;
-    }
-
-    .checkbox-col input[type="checkbox"] {
-      margin: 0;
-      cursor: pointer;
     }
 
     tr.row-selected td {
@@ -1330,22 +1446,36 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
     const cell = this.scrollContainer?.nativeElement.querySelector(cellSelector) as HTMLElement;
 
     if (cell) {
-      const containerRect = this.scrollContainer.nativeElement.getBoundingClientRect();
       const cellRect = cell.getBoundingClientRect();
 
-      // Position editor below and to the right of the cell, within container bounds
-      let top = cellRect.bottom - containerRect.top + this.scrollContainer.nativeElement.scrollTop + 4;
-      let left = cellRect.left - containerRect.left + 4;
+      // Position editor below the cell, using viewport coordinates (fixed positioning)
+      let top = cellRect.bottom + 4;
+      let left = cellRect.left;
 
-      // Keep editor within visible area
-      const maxLeft = containerRect.width - 320; // Approximate editor width
-      if (left > maxLeft) left = maxLeft;
-      if (left < 0) left = 0;
+      // Keep editor within viewport bounds
+      const editorWidth = 400; // Approximate editor width
+      const editorHeight = 300; // Approximate editor height
+
+      // Adjust horizontal position if too close to right edge
+      if (left + editorWidth > window.innerWidth - 20) {
+        left = window.innerWidth - editorWidth - 20;
+      }
+      if (left < 20) left = 20;
+
+      // Adjust vertical position if too close to bottom edge
+      if (top + editorHeight > window.innerHeight - 20) {
+        // Position above the cell instead
+        top = cellRect.top - editorHeight - 4;
+        if (top < 20) top = 20;
+      }
 
       this.editorPosition.set({ top, left });
     } else {
-      // Fallback positioning
-      this.editorPosition.set({ top: 100, left: 100 });
+      // Fallback positioning - center of viewport
+      this.editorPosition.set({
+        top: window.innerHeight / 2 - 150,
+        left: window.innerWidth / 2 - 200
+      });
     }
 
     this.editingCell.set({ row, col });
@@ -1758,29 +1888,50 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   /**
    * Gets the CSS class for a column based on its name/type.
+   * SDRF columns are categorized for visual distinction.
    */
   getColumnTypeClass(columnName: string): string {
     const name = columnName.toLowerCase().trim();
 
-    if (name === 'source name') {
+    // Source/Sample identification columns - Green
+    if (name === 'source name' || name === 'sample name') {
       return 'source';
     }
-    if (name === 'assay name') {
+
+    // Assay/MS run columns - Purple
+    if (name === 'assay name' || name === 'ms run' || name.startsWith('ms ')) {
       return 'assay';
     }
+
+    // Characteristics columns - Blue
     if (name.startsWith('characteristics[')) {
       return 'characteristic';
     }
+
+    // Factor value columns - Orange
     if (name.startsWith('factor value[') || name.startsWith('factorvalue[')) {
       return 'factor';
     }
+
+    // Comment columns - Gray
     if (name.startsWith('comment[')) {
       return 'comment';
     }
-    if (name === 'technology type' || name === 'fraction identifier' || name === 'label') {
-      return 'special';
+
+    // Data/file columns - Teal
+    if (name === 'data file' || name === 'file uri' || name === 'uri' ||
+        name.includes('file') || name.includes('uri') || name.includes('path')) {
+      return 'data';
     }
 
+    // Technical/protocol columns - Blue Gray
+    if (name === 'technology type' || name === 'fraction identifier' ||
+        name === 'label' || name === 'material type' ||
+        name === 'protocol ref' || name.startsWith('protocol')) {
+      return 'technical';
+    }
+
+    // Unrecognized columns - Distinct brown/tan color
     return 'other';
   }
 
