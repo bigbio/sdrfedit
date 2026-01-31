@@ -107,6 +107,9 @@ const BUFFER_ROWS = 10;
               <span class="legend-item characteristic">Characteristics</span>
               <span class="legend-item factor">Factor Values</span>
               <span class="legend-item comment">Comments</span>
+              <span class="legend-item data">Data</span>
+              <span class="legend-item technical">Technical</span>
+              <span class="legend-item other">Other</span>
             </div>
             <span class="table-info">
               {{ table()!.columns.length }} columns,
@@ -512,6 +515,21 @@ const BUFFER_ROWS = 10;
       background: rgba(158, 158, 158, 0.1);
     }
 
+    .legend-item.data {
+      border-left-color: #009688;
+      background: rgba(0, 150, 136, 0.1);
+    }
+
+    .legend-item.technical {
+      border-left-color: #607d8b;
+      background: rgba(96, 125, 139, 0.1);
+    }
+
+    .legend-item.other {
+      border-left-color: #8d6e63;
+      background: rgba(141, 110, 99, 0.1);
+    }
+
     .loading-overlay {
       display: flex;
       flex-direction: column;
@@ -866,11 +884,11 @@ const BUFFER_ROWS = 10;
       display: inline;
     }
 
-    /* Source Name - Green */
+    /* Source Name / Sample Name - Green */
     .col-type-source .col-type-indicator { background: #4caf50; }
     .col-type-source { border-left: 3px solid #4caf50; }
 
-    /* Assay Name - Purple */
+    /* Assay Name / MS Run - Purple */
     .col-type-assay .col-type-indicator { background: #9c27b0; }
     .col-type-assay { border-left: 3px solid #9c27b0; }
 
@@ -886,13 +904,17 @@ const BUFFER_ROWS = 10;
     .col-type-comment .col-type-indicator { background: #9e9e9e; }
     .col-type-comment { border-left: 3px solid #9e9e9e; }
 
-    /* Technology Type & Special - Blue Gray */
-    .col-type-special .col-type-indicator { background: #607d8b; }
-    .col-type-special { border-left: 3px solid #607d8b; }
+    /* Data/File columns - Teal */
+    .col-type-data .col-type-indicator { background: #009688; }
+    .col-type-data { border-left: 3px solid #009688; }
 
-    /* Other/Unknown */
-    .col-type-other .col-type-indicator { background: #bdbdbd; }
-    .col-type-other { border-left: 3px solid #bdbdbd; }
+    /* Technical/Protocol columns - Blue Gray */
+    .col-type-technical .col-type-indicator { background: #607d8b; }
+    .col-type-technical { border-left: 3px solid #607d8b; }
+
+    /* Other/Unknown - Brown/Tan (distinct from gray) */
+    .col-type-other .col-type-indicator { background: #8d6e63; }
+    .col-type-other { border-left: 3px solid #8d6e63; }
 
     /* Sort indicator */
     .sort-indicator {
@@ -1705,29 +1727,50 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   /**
    * Gets the CSS class for a column based on its name/type.
+   * SDRF columns are categorized for visual distinction.
    */
   getColumnTypeClass(columnName: string): string {
     const name = columnName.toLowerCase().trim();
 
-    if (name === 'source name') {
+    // Source/Sample identification columns - Green
+    if (name === 'source name' || name === 'sample name') {
       return 'source';
     }
-    if (name === 'assay name') {
+
+    // Assay/MS run columns - Purple
+    if (name === 'assay name' || name === 'ms run' || name.startsWith('ms ')) {
       return 'assay';
     }
+
+    // Characteristics columns - Blue
     if (name.startsWith('characteristics[')) {
       return 'characteristic';
     }
+
+    // Factor value columns - Orange
     if (name.startsWith('factor value[') || name.startsWith('factorvalue[')) {
       return 'factor';
     }
+
+    // Comment columns - Gray
     if (name.startsWith('comment[')) {
       return 'comment';
     }
-    if (name === 'technology type' || name === 'fraction identifier' || name === 'label') {
-      return 'special';
+
+    // Data/file columns - Teal
+    if (name === 'data file' || name === 'file uri' || name === 'uri' ||
+        name.includes('file') || name.includes('uri') || name.includes('path')) {
+      return 'data';
     }
 
+    // Technical/protocol columns - Blue Gray
+    if (name === 'technology type' || name === 'fraction identifier' ||
+        name === 'label' || name === 'material type' ||
+        name === 'protocol ref' || name.startsWith('protocol')) {
+      return 'technical';
+    }
+
+    // Unrecognized columns - Distinct brown/tan color
     return 'other';
   }
 
