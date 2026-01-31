@@ -257,22 +257,6 @@ const BUFFER_ROWS = 10;
               </table>
             </div>
 
-            <!-- Cell editor popup -->
-            @if (editingCell() && editingColumn()) {
-              <div
-                class="cell-editor-popup"
-                [style.top.px]="editorPosition().top"
-                [style.left.px]="editorPosition().left"
-              >
-                <sdrf-cell-editor
-                  [value]="getCellValue(editingCell()!.row, editingCell()!.col)"
-                  [column]="editingColumn()!"
-                  [rowIndex]="editingCell()!.row"
-                  (save)="onCellEditorSave($event)"
-                  (cancel)="cancelEditing()"
-                ></sdrf-cell-editor>
-              </div>
-            }
           </div>
 
           <!-- Stats Panel Sidebar -->
@@ -388,6 +372,30 @@ const BUFFER_ROWS = 10;
         <div class="empty-state">
           <p>No SDRF file loaded</p>
           <p class="hint">Import a file or provide a URL to get started</p>
+        </div>
+      }
+
+      <!-- Cell editor popup (fixed position, stays in viewport) -->
+      @if (editingCell() && editingColumn()) {
+        <div
+          class="cell-editor-popup"
+          [style.top.px]="editorPosition().top"
+          [style.left.px]="editorPosition().left"
+        >
+          <div class="cell-editor-context">
+            <span class="context-info">
+              Editing Row <strong>{{ editingCell()!.row }}</strong>,
+              Column: <strong>{{ editingColumn()!.name }}</strong>
+            </span>
+            <button class="btn-close" (click)="cancelEditing()" title="Close">×</button>
+          </div>
+          <sdrf-cell-editor
+            [value]="getCellValue(editingCell()!.row, editingCell()!.col)"
+            [column]="editingColumn()!"
+            [rowIndex]="editingCell()!.row"
+            (save)="onCellEditorSave($event)"
+            (cancel)="cancelEditing()"
+          ></sdrf-cell-editor>
         </div>
       }
     </div>
@@ -755,9 +763,49 @@ const BUFFER_ROWS = 10;
     }
 
     .cell-editor-popup {
-      position: absolute;
-      z-index: 100;
+      position: fixed;
+      z-index: 1000;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
       animation: fadeIn 0.15s ease-out;
+      max-width: 400px;
+      max-height: 80vh;
+      overflow: auto;
+    }
+
+    .cell-editor-context {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: #1a237e;
+      color: white;
+      border-radius: 8px 8px 0 0;
+      font-size: 12px;
+    }
+
+    .cell-editor-context .context-info {
+      flex: 1;
+    }
+
+    .cell-editor-context strong {
+      color: #90caf9;
+    }
+
+    .cell-editor-context .btn-close {
+      background: none;
+      border: none;
+      color: white;
+      font-size: 18px;
+      cursor: pointer;
+      padding: 0 4px;
+      margin-left: 8px;
+      opacity: 0.8;
+    }
+
+    .cell-editor-context .btn-close:hover {
+      opacity: 1;
     }
 
     @keyframes fadeIn {
@@ -1346,22 +1394,36 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
     const cell = this.scrollContainer?.nativeElement.querySelector(cellSelector) as HTMLElement;
 
     if (cell) {
-      const containerRect = this.scrollContainer.nativeElement.getBoundingClientRect();
       const cellRect = cell.getBoundingClientRect();
 
-      // Position editor below and to the right of the cell, within container bounds
-      let top = cellRect.bottom - containerRect.top + this.scrollContainer.nativeElement.scrollTop + 4;
-      let left = cellRect.left - containerRect.left + 4;
+      // Position editor below the cell, using viewport coordinates (fixed positioning)
+      let top = cellRect.bottom + 4;
+      let left = cellRect.left;
 
-      // Keep editor within visible area
-      const maxLeft = containerRect.width - 320; // Approximate editor width
-      if (left > maxLeft) left = maxLeft;
-      if (left < 0) left = 0;
+      // Keep editor within viewport bounds
+      const editorWidth = 400; // Approximate editor width
+      const editorHeight = 300; // Approximate editor height
+
+      // Adjust horizontal position if too close to right edge
+      if (left + editorWidth > window.innerWidth - 20) {
+        left = window.innerWidth - editorWidth - 20;
+      }
+      if (left < 20) left = 20;
+
+      // Adjust vertical position if too close to bottom edge
+      if (top + editorHeight > window.innerHeight - 20) {
+        // Position above the cell instead
+        top = cellRect.top - editorHeight - 4;
+        if (top < 20) top = 20;
+      }
 
       this.editorPosition.set({ top, left });
     } else {
-      // Fallback positioning
-      this.editorPosition.set({ top: 100, left: 100 });
+      // Fallback positioning - center of viewport
+      this.editorPosition.set({
+        top: window.innerHeight / 2 - 150,
+        left: window.innerWidth / 2 - 200
+      });
     }
 
     this.editingCell.set({ row, col });
