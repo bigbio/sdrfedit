@@ -37,6 +37,7 @@ import {
   generateSuggestionId,
 } from '../../core/models/llm';
 import { SdrfTable } from '../../core/models/sdrf-table';
+import { getValueForSample } from '../../core/models/sdrf-column';
 import {
   RecommendationService,
   recommendationService,
@@ -61,6 +62,7 @@ import {
   sdrfExamplesService,
 } from '../../core/services/sdrf-examples.service';
 import { promptService } from '../../core/services/llm/prompt.service';
+import { AiWorkerService } from '../../core/services/ai-worker.service';
 import {
   PyodideValidatorService,
   pyodideValidatorService,
@@ -696,6 +698,13 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                     </ul>
                   </div>
                 }
+                <!-- Streaming response while loading -->
+                @if (chatLoading() && chatStreamContent()) {
+                  <div class="chat-msg msg-assistant streaming">
+                    <div class="msg-role">AI</div>
+                    <div class="msg-content">{{ chatStreamContent() }}<span class="cursor">▋</span></div>
+                  </div>
+                }
               </div>
               <div class="chat-input-area">
                 <textarea
@@ -792,7 +801,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
       justify-content: space-between;
       align-items: center;
       padding: 12px 16px;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: #667eea;
       color: white;
       flex-shrink: 0;
     }
@@ -1213,6 +1222,17 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
       white-space: pre-wrap;
     }
 
+    /* Streaming cursor animation */
+    .chat-msg.streaming .cursor {
+      animation: blink 1s step-end infinite;
+      color: #667eea;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
     /* Chat Suggestion Cards */
     .chat-suggestions {
       margin-top: 10px;
@@ -1409,7 +1429,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
     .btn:hover:not(:disabled) { background: #f3f4f6; }
 
     .btn-primary {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: #667eea;
       color: white;
       border: none;
     }
@@ -2039,6 +2059,10 @@ export class SdrfRecommendPanelComponent implements OnChanges {
   private cleaningService: DataCleaningService;
   private examplesService: SdrfExamplesService;
   private pyodideService: PyodideValidatorService;
+  private aiWorker: AiWorkerService;
+
+  // Streaming chat content (shown while response is being generated)
+  readonly chatStreamContent = signal<string>('');
 
   constructor() {
     this.recommendationService = recommendationService;
@@ -2047,6 +2071,7 @@ export class SdrfRecommendPanelComponent implements OnChanges {
     this.cleaningService = dataCleaningService;
     this.examplesService = sdrfExamplesService;
     this.pyodideService = pyodideValidatorService;
+    this.aiWorker = new AiWorkerService();
 
     // Load examples index in background
     this.loadExamplesIndex();
@@ -2510,6 +2535,7 @@ ${errors.length > 15 ? `...and ${errors.length - 15} more` : ''}`;
     this.chatInput.set('');
     this.chatMessages.update(msgs => [...msgs, { role: 'user', content: message, timestamp: new Date() }]);
     this.chatLoading.set(true);
+    this.chatStreamContent.set(''); // Reset streaming content
 
     try {
       // Build context about the current table state
@@ -2527,7 +2553,6 @@ ${errors.length > 15 ? `...and ${errors.length - 15} more` : ''}`;
       );
 
       // Build chat messages for the LLM
-      const provider = await this.recommendationService.getActiveProvider();
       const llmMessages = [
         { role: 'system' as const, content: systemPrompt },
         // Add previous chat messages for context (text only, without suggestions)
@@ -2538,9 +2563,36 @@ ${errors.length > 15 ? `...and ${errors.length - 15} more` : ''}`;
         { role: 'user' as const, content: message }
       ];
 
-      // Call the LLM
-      const response = await provider.complete(llmMessages);
-      const responseContent = response.content || '';
+      let responseContent = '';
+
+      // Use AI Worker for non-blocking streaming if available
+      if (this.aiWorker.isAvailable()) {
+        const providerType = this.settingsService.getActiveProvider();
+        const config = this.settingsService.getProviderConfig(providerType);
+
+        if (!config) {
+          throw new Error('AI provider is not configured');
+        }
+
+        // Stream the response through the worker
+        responseContent = await this.aiWorker.stream(
+          providerType,
+          config,
+          llmMessages,
+          (chunk) => {
+            // Update streaming content as chunks arrive
+            this.chatStreamContent.update(s => s + chunk);
+          }
+        );
+      } else {
+        // Fallback to direct provider call if worker unavailable
+        const provider = await this.recommendationService.getActiveProvider();
+        const response = await provider.complete(llmMessages);
+        responseContent = response.content || '';
+      }
+
+      // Clear streaming content now that we have the full response
+      this.chatStreamContent.set('');
 
       // Parse the response for text and suggestions
       const parsed = this.parseChatResponse(responseContent);
@@ -2553,6 +2605,7 @@ ${errors.length > 15 ? `...and ${errors.length - 15} more` : ''}`;
         timestamp: new Date()
       }]);
     } catch (err) {
+      this.chatStreamContent.set(''); // Clear on error
       const errorMsg = err instanceof Error ? err.message : 'Failed to get response';
       this.chatMessages.update(msgs => [...msgs, {
         role: 'assistant',
@@ -2965,9 +3018,57 @@ ${errors.length > 15 ? `...and ${errors.length - 15} more` : ''}`;
   private buildTableContext(): string {
     if (!this.table) return 'No table loaded';
 
-    const columns = this.table.columns.map(c => c.name).join(', ');
-    return `- ${this.table.sampleCount} samples, ${this.table.columns.length} columns
-- Columns: ${columns.substring(0, 500)}${columns.length > 500 ? '...' : ''}`;
+    const columns = this.table.columns;
+    const sampleCount = this.table.sampleCount;
+
+    let context = `## SDRF Table Summary\n`;
+    context += `- **Samples:** ${sampleCount}\n`;
+    context += `- **Columns:** ${columns.length}\n\n`;
+
+    // Add column details with statistics
+    context += `### Column Details\n\n`;
+
+    for (const col of columns) {
+      // Get all unique values for this column
+      const values: string[] = [];
+      for (let i = 1; i <= sampleCount; i++) {
+        const val = getValueForSample(col, i);
+        if (val) values.push(val);
+      }
+
+      const uniqueValues = [...new Set(values)];
+      const emptyCount = sampleCount - values.filter(v => v && v.trim() !== '').length;
+      const naCount = values.filter(v => v?.toLowerCase() === 'not available').length;
+
+      context += `**${col.name}:**\n`;
+      context += `- Unique values: ${uniqueValues.length}\n`;
+      if (emptyCount > 0) context += `- Empty: ${emptyCount}\n`;
+      if (naCount > 0) context += `- "not available": ${naCount}\n`;
+
+      // Show sample values
+      if (uniqueValues.length <= 8) {
+        context += `- Values: ${uniqueValues.join(', ')}\n`;
+      } else {
+        context += `- Sample values: ${uniqueValues.slice(0, 5).join(', ')}... (${uniqueValues.length} total)\n`;
+      }
+      context += '\n';
+    }
+
+    // Add sample data (first 3 rows)
+    context += `### Sample Data (first ${Math.min(3, sampleCount)} rows)\n\n`;
+    context += '| Sample | ' + columns.slice(0, 6).map(c => c.name.replace(/characteristics\[|\]/g, '')).join(' | ') + ' |\n';
+    context += '|' + '----|'.repeat(Math.min(7, columns.length + 1)) + '\n';
+
+    for (let i = 1; i <= Math.min(3, sampleCount); i++) {
+      const rowValues = columns.slice(0, 6).map(col => {
+        const val = getValueForSample(col, i);
+        // Truncate long values
+        return val && val.length > 20 ? val.substring(0, 17) + '...' : (val || '');
+      });
+      context += `| ${i} | ${rowValues.join(' | ')} |\n`;
+    }
+
+    return context;
   }
 
   private buildQualityContext(): string {

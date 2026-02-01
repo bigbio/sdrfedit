@@ -34,8 +34,12 @@ async function initPyodide(): Promise<void> {
 
   postMessage({ type: 'progress', payload: 'Installing sdrf-pipelines...' });
 
+  // Construct absolute URL for the wheel file
+  // Web Workers need absolute URLs since relative paths resolve from worker location
+  const wheelUrl = new URL('/assets/wheels/sdrf_pipelines-0.0.34.dev-py3-none-any.whl', self.location.origin).href;
+  pyodide.globals.set('wheel_url', wheelUrl);
+
   // Install sdrf-pipelines from local wheel (dev version with clean dependencies)
-  // The wheel is served from the same origin as the app
   await pyodide.runPythonAsync(`
 import micropip
 
@@ -47,9 +51,8 @@ await micropip.install([
     'pydantic',
 ])
 
-# Install sdrf-pipelines from local wheel (dev version)
-# Using relative URL that will resolve from the app's origin
-await micropip.install('/assets/wheels/sdrf_pipelines-0.0.34.dev-py3-none-any.whl')
+# Install sdrf-pipelines from local wheel using absolute URL
+await micropip.install(wheel_url)
 
 print("sdrf-pipelines installed successfully")
   `);

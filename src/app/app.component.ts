@@ -4,7 +4,7 @@
  * Main application component that hosts the SDRF editor.
  */
 
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, Input } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.component';
 
@@ -14,10 +14,12 @@ import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.compon
   imports: [FormsModule, SdrfEditorComponent],
   template: `
     <div class="app-container">
-      <header class="app-header">
-        <h1>SDRF Editor</h1>
-        <p>Standalone SDRF (Sample and Data Relationship Format) editor for proteomics metadata</p>
-      </header>
+      @if (showHeader) {
+        <header class="app-header">
+          <h1>SDRF Editor</h1>
+          <p>Standalone SDRF (Sample and Data Relationship Format) editor for proteomics metadata</p>
+        </header>
+      }
 
       <main class="app-main">
         <div class="app-controls">
@@ -138,6 +140,9 @@ import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.compon
   `]
 })
 export class AppComponent implements OnInit {
+  /** Control visibility of the header section. Set to false when embedding in another site. */
+  @Input() showHeader = true;
+
   sdrfUrl = '';
   activeUrl = '';
 

@@ -1022,7 +1022,7 @@ const BUFFER_ROWS = 10;
       justify-content: space-between;
       align-items: center;
       padding: 10px 16px;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: #667eea;
       color: white;
     }
 
@@ -1256,7 +1256,7 @@ const BUFFER_ROWS = 10;
     .btn-ai-assist {
       flex-shrink: 0;
       padding: 6px 12px;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: #667eea;
       color: white;
       border: none;
       border-radius: 6px;
@@ -1348,17 +1348,17 @@ const BUFFER_ROWS = 10;
     }
 
     .btn-ai {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: #667eea;
       color: white;
       border-color: #667eea;
     }
 
     .btn-ai:hover {
-      background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+      background: #5a67d8;
     }
 
     .btn-ai.btn-active {
-      background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%) !important;
+      background: #5a67d8 !important;
       border-color: #5a67d8 !important;
       box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.3);
     }

@@ -75,22 +75,43 @@ The editor integrates with [sdrf-pipelines](https://github.com/bigbio/sdrf-pipel
 3. Validation runs in a Web Worker to avoid blocking the UI
 4. Results show errors and warnings with suggestions for fixes
 
-### Updating the Validator
+### Building the Validator from Source
 
-To use a newer version of sdrf-pipelines:
+To build and use the latest sdrf-pipelines validator:
 
 ```bash
-# Build the wheel from sdrf-pipelines repo
-cd /path/to/sdrf-pipelines
+# 1. Clone the sdrf-pipelines repository
+git clone https://github.com/bigbio/sdrf-pipelines.git
+cd sdrf-pipelines
+
+# 2. Install build dependencies
 pip install build
+
+# 3. Build the wheel
 python -m build --wheel
 
-# Copy the wheel to the editor's assets
+# The wheel will be created in dist/
+# e.g., dist/sdrf_pipelines-0.0.34-py3-none-any.whl
+```
+
+### Updating the Validator in SDRF Editor
+
+After building a new wheel:
+
+```bash
+# 1. Copy the wheel to the editor's assets
 cp dist/sdrf_pipelines-*.whl /path/to/sdrfedit/src/assets/wheels/
 
-# Update the filename in the worker
-# Edit: src/app/workers/pyodide.worker.ts
-# Change the micropip.install line to match the new wheel filename
+# 2. Remove the old wheel (if different version)
+rm /path/to/sdrfedit/src/assets/wheels/sdrf_pipelines-*old*.whl
+
+# 3. Update the filename in the worker
+#    Edit: src/app/workers/pyodide.worker.ts
+#    Find the micropip.install line and update the wheel filename:
+#    await micropip.install('/assets/wheels/sdrf_pipelines-X.X.X-py3-none-any.whl')
+
+# 4. Rebuild the editor
+npm run build -- --configuration=production
 ```
 
 ## AI Assistant Setup (Optional)

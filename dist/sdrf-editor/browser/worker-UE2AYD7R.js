@@ -1,4 +1,4 @@
-var e=null,i=!1;async function p(){postMessage({type:"progress",payload:"Loading Pyodide runtime..."});let{loadPyodide:t}=await import("https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.mjs");e=await t({indexURL:"https://cdn.jsdelivr.net/pyodide/v0.26.4/full/"}),postMessage({type:"progress",payload:"Installing Python packages..."}),await e.loadPackage(["micropip","numpy","pandas"]),postMessage({type:"progress",payload:"Installing sdrf-pipelines..."}),await e.runPythonAsync(`
+var e=null,i=!1;async function p(){postMessage({type:"progress",payload:"Loading Pyodide runtime..."});let{loadPyodide:t}=await import("https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.mjs");e=await t({indexURL:"https://cdn.jsdelivr.net/pyodide/v0.26.4/full/"}),postMessage({type:"progress",payload:"Installing Python packages..."}),await e.loadPackage(["micropip","numpy","pandas"]),postMessage({type:"progress",payload:"Installing sdrf-pipelines..."});let r=new URL("/assets/wheels/sdrf_pipelines-0.0.34.dev-py3-none-any.whl",self.location.origin).href;e.globals.set("wheel_url",r),await e.runPythonAsync(`
 import micropip
 
 # Install dependencies first
@@ -9,9 +9,8 @@ await micropip.install([
     'pydantic',
 ])
 
-# Install sdrf-pipelines from local wheel (dev version)
-# Using relative URL that will resolve from the app's origin
-await micropip.install('/assets/wheels/sdrf_pipelines-0.0.34.dev-py3-none-any.whl')
+# Install sdrf-pipelines from local wheel using absolute URL
+await micropip.install(wheel_url)
 
 print("sdrf-pipelines installed successfully")
   `),i=!0,postMessage({type:"ready"})}async function d(){if(!i)throw new Error("Pyodide not initialized");let t=await e.runPythonAsync(`
@@ -21,7 +20,7 @@ from sdrf_pipelines.sdrf.schemas import SchemaRegistry
 registry = SchemaRegistry()
 templates = registry.get_schema_names()
 json.dumps(templates)
-  `);return JSON.parse(t)}async function m(t,s,a=!0){if(!i)throw new Error("Pyodide not initialized");e.globals.set("sdrf_content",t),e.globals.set("template_names",s),e.globals.set("skip_ontology",a);let r=await e.runPythonAsync(`
+  `);return JSON.parse(t)}async function m(t,r,a=!0){if(!i)throw new Error("Pyodide not initialized");e.globals.set("sdrf_content",t),e.globals.set("template_names",r),e.globals.set("skip_ontology",a);let s=await e.runPythonAsync(`
 import json
 import logging
 from io import StringIO
@@ -83,7 +82,7 @@ for err in all_errors:
         })
 
 json.dumps(result)
-  `);return JSON.parse(r)}async function g(t){if(!i)throw new Error("Pyodide not initialized");e.globals.set("template_name",t);let s=await e.runPythonAsync(`
+  `);return JSON.parse(s)}async function g(t){if(!i)throw new Error("Pyodide not initialized");e.globals.set("template_name",t);let r=await e.runPythonAsync(`
 import json
 from sdrf_pipelines.sdrf.schemas import SchemaRegistry
 
@@ -110,4 +109,4 @@ if schema:
     json.dumps(details)
 else:
     json.dumps(None)
-  `);return JSON.parse(s)}addEventListener("message",async t=>{let{type:s,payload:a,id:r}=t.data;try{switch(s){case"init":await p();break;case"validate":let o=await m(a.sdrf,a.templates,a.skipOntology??!0);postMessage({type:"validation-result",payload:o,id:r});break;case"get-templates":let n=await d();postMessage({type:"templates",payload:n,id:r});break;case"get-template-details":let l=await g(a.template);postMessage({type:"template-details",payload:l,id:r});break;default:postMessage({type:"error",payload:`Unknown message type: ${s}`,id:r})}}catch(o){let n=o instanceof Error?o.message:String(o);postMessage({type:"error",payload:n,id:r})}});postMessage({type:"worker-loaded"});
+  `);return JSON.parse(r)}addEventListener("message",async t=>{let{type:r,payload:a,id:s}=t.data;try{switch(r){case"init":await p();break;case"validate":let o=await m(a.sdrf,a.templates,a.skipOntology??!0);postMessage({type:"validation-result",payload:o,id:s});break;case"get-templates":let n=await d();postMessage({type:"templates",payload:n,id:s});break;case"get-template-details":let l=await g(a.template);postMessage({type:"template-details",payload:l,id:s});break;default:postMessage({type:"error",payload:`Unknown message type: ${r}`,id:s})}}catch(o){let n=o instanceof Error?o.message:String(o);postMessage({type:"error",payload:n,id:s})}});postMessage({type:"worker-loaded"});

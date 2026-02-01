@@ -60,6 +60,18 @@ export class SdrfExamplesService {
 
   private async doLoadIndex(): Promise<void> {
     try {
+      // Try loading compressed version first (76% smaller)
+      const index = await this.loadCompressedIndex();
+      if (index) {
+        this.index = index;
+        this.loaded = true;
+        console.log(
+          `SDRF examples loaded (compressed): ${this.index?.metadata?.totalRows} rows from ${this.index?.metadata?.filesProcessed} files`
+        );
+        return;
+      }
+
+      // Fallback to uncompressed version
       const response = await fetch('assets/sdrf-examples-index.json');
       if (!response.ok) {
         throw new Error(`Failed to load index: ${response.status}`);
@@ -84,6 +96,56 @@ export class SdrfExamplesService {
         },
       };
       this.loaded = true;
+    }
+  }
+
+  /**
+   * Attempts to load and decompress the gzipped index file.
+   * Uses the browser's DecompressionStream API for efficient decompression.
+   * Returns null if decompression is not supported or fails.
+   */
+  private async loadCompressedIndex(): Promise<SdrfExamplesIndex | null> {
+    // Check if DecompressionStream is supported
+    if (typeof DecompressionStream === 'undefined') {
+      console.log('DecompressionStream not supported, falling back to uncompressed');
+      return null;
+    }
+
+    try {
+      const response = await fetch('assets/sdrf-examples-index.json.gz');
+      if (!response.ok || !response.body) {
+        return null;
+      }
+
+      // Decompress the response using DecompressionStream
+      const decompressedStream = response.body.pipeThrough(
+        new DecompressionStream('gzip')
+      );
+
+      // Read the decompressed stream as text
+      const reader = decompressedStream.getReader();
+      const chunks: Uint8Array[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+
+      // Combine chunks and decode as text
+      const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+      const combined = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      const text = new TextDecoder().decode(combined);
+      return JSON.parse(text);
+    } catch (error) {
+      console.warn('Failed to load compressed index, falling back to uncompressed:', error);
+      return null;
     }
   }
 

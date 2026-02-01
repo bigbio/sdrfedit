@@ -104,7 +104,7 @@ export interface BulkColumnEditEvent {
   styles: [`
     .bulk-toolbar {
       display: none;
-      background: linear-gradient(135deg, #1a237e 0%, #283593 100%);
+      background: #1a237e;
       color: white;
       padding: 12px 16px;
       gap: 16px;

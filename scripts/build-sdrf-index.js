@@ -22,11 +22,12 @@
  *   { "paths": ["./path1", "./path2"] }
  *
  * Output:
- *   src/assets/sdrf-examples-index.json
+ *   src/assets/sdrf-examples-index.json.gz (gzip compressed)
  */
 
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 // Columns to index (these are the most useful for AI suggestions)
 const COLUMNS_TO_INDEX = [
@@ -613,18 +614,25 @@ function buildIndex(annotatedPaths) {
 }
 
 /**
- * Write index to file.
+ * Write index to gzip-compressed file.
  */
 function writeIndex(index, outputPath) {
-  const jsonContent = JSON.stringify(index, null, 2);
-  fs.writeFileSync(outputPath, jsonContent, 'utf-8');
+  const jsonContent = JSON.stringify(index);
+  const uncompressedSize = Buffer.byteLength(jsonContent, 'utf-8');
+
+  // Compress with gzip
+  const compressed = zlib.gzipSync(jsonContent, { level: 9 });
+  fs.writeFileSync(outputPath, compressed);
+
   console.log(`\nIndex written to: ${outputPath}`);
-  console.log(`File size: ${(Buffer.byteLength(jsonContent, 'utf-8') / 1024).toFixed(1)} KB`);
+  console.log(`Uncompressed size: ${(uncompressedSize / 1024).toFixed(1)} KB`);
+  console.log(`Compressed size: ${(compressed.length / 1024).toFixed(1)} KB`);
+  console.log(`Compression ratio: ${((1 - compressed.length / uncompressedSize) * 100).toFixed(1)}%`);
 }
 
 // Main execution
 const annotatedPaths = getPaths();
-const outputPath = path.resolve(__dirname, '../src/assets/sdrf-examples-index.json');
+const outputPath = path.resolve(__dirname, '../src/assets/sdrf-examples-index.json.gz');
 
 // Ensure assets directory exists
 const assetsDir = path.dirname(outputPath);
