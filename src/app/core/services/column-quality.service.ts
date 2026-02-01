@@ -678,10 +678,31 @@ export class ColumnQualityService {
       return true;
     }
 
-    // Check patterns - template-related comments are expected to be uniform
+    // Check patterns - many column types are expected to be uniform in a single study
     if (normalized.includes('template') ||
         normalized.includes('version') ||
         normalized.includes('protocol')) {
+      return true;
+    }
+
+    // All comment columns are typically uniform per study (instrument, label, modifications, etc.)
+    if (normalized.startsWith('comment[')) {
+      return true;
+    }
+
+    // Factor values can be uniform in single-factor studies
+    if (normalized.startsWith('factor value[')) {
+      return true;
+    }
+
+    // Technology type and assay columns are typically uniform
+    if (normalized.includes('technology') ||
+        normalized.includes('assay')) {
+      return true;
+    }
+
+    // Material type columns are often uniform
+    if (normalized.includes('material type')) {
       return true;
     }
 

@@ -186,10 +186,6 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                       <span class="stat-value">{{ qualityResult()!.summary.totalColumns }}</span>
                       <span class="stat-label">Columns</span>
                     </div>
-                    <div class="stat stat-warn" [class.hidden]="qualityResult()!.summary.redundantColumns === 0">
-                      <span class="stat-value">{{ qualityResult()!.summary.redundantColumns }}</span>
-                      <span class="stat-label">Redundant</span>
-                    </div>
                     <div class="stat stat-error" [class.hidden]="qualityResult()!.summary.effectivelyEmptyColumns === 0">
                       <span class="stat-value">{{ qualityResult()!.summary.effectivelyEmptyColumns }}</span>
                       <span class="stat-label">Empty</span>
@@ -319,132 +315,6 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                 </div>
               }
 
-              <!-- Pyodide Validation Section -->
-              <div class="pyodide-section">
-                <div class="section-header">
-                  <h4>sdrf-pipelines Validation</h4>
-                  @if (pyodideState() === 'not-loaded') {
-                    <span class="pyodide-badge badge-info">Not loaded</span>
-                  } @else if (pyodideState() === 'loading') {
-                    <span class="pyodide-badge badge-loading">Loading...</span>
-                  } @else if (pyodideState() === 'ready') {
-                    <span class="pyodide-badge badge-ready">Ready</span>
-                  } @else if (pyodideState() === 'error') {
-                    <span class="pyodide-badge badge-error">Error</span>
-                  }
-                </div>
-
-                @if (pyodideState() === 'not-loaded') {
-                  <div class="pyodide-info">
-                    <p>Run validation using the official sdrf-pipelines Python tool directly in your browser.</p>
-                    <p class="pyodide-note">First load downloads ~15MB (cached afterwards).</p>
-                  </div>
-                }
-
-                @if (pyodideState() === 'loading') {
-                  <div class="pyodide-loading">
-                    <span class="spinner"></span>
-                    <span class="progress-text">{{ pyodideLoadProgress() }}</span>
-                  </div>
-                }
-
-                @if (pyodideState() === 'ready' || pyodideState() === 'not-loaded') {
-                  <!-- Template Selector -->
-                  <div class="template-selector">
-                    <label>Templates to validate against:</label>
-                    <div class="template-checkboxes">
-                      @for (template of pyodideAvailableTemplates(); track template) {
-                        <label class="template-option">
-                          <input
-                            type="checkbox"
-                            [checked]="selectedTemplates().includes(template)"
-                            (change)="toggleTemplate(template)"
-                          />
-                          {{ template }}
-                        </label>
-                      }
-                      @if (pyodideAvailableTemplates().length === 0) {
-                        @for (template of ['default', 'human', 'vertebrates', 'nonvertebrates', 'plants', 'cell_lines']; track template) {
-                          <label class="template-option">
-                            <input
-                              type="checkbox"
-                              [checked]="selectedTemplates().includes(template)"
-                              (change)="toggleTemplate(template)"
-                            />
-                            {{ template }}
-                          </label>
-                        }
-                      }
-                    </div>
-                  </div>
-
-                  <button
-                    class="btn btn-primary btn-block"
-                    [disabled]="pyodideValidating() || !table || selectedTemplates().length === 0"
-                    (click)="runPyodideValidation()"
-                  >
-                    @if (pyodideValidating()) {
-                      <span class="spinner"></span> Validating...
-                    } @else if (pyodideState() === 'not-loaded') {
-                      Load & Validate
-                    } @else {
-                      Validate with sdrf-pipelines
-                    }
-                  </button>
-                }
-
-                @if (pyodideState() === 'error') {
-                  <div class="pyodide-error">
-                    <p>Failed to load Pyodide: {{ pyodideLastError() }}</p>
-                    <button class="btn btn-sm" (click)="initPyodide()">Retry</button>
-                  </div>
-                }
-
-                <!-- Validation Results -->
-                @if (pyodideErrors().length > 0) {
-                  <div class="validation-results">
-                    <div class="validation-summary">
-                      @if (pyodideErrorCount() > 0) {
-                        <span class="error-count">{{ pyodideErrorCount() }} errors</span>
-                      }
-                      @if (pyodideWarningCount() > 0) {
-                        <span class="warning-count">{{ pyodideWarningCount() }} warnings</span>
-                      }
-                    </div>
-                    <div class="validation-errors-list">
-                      @for (error of pyodideErrors(); track $index) {
-                        <div class="validation-error" [class]="'level-' + error.level">
-                          <div class="error-header">
-                            <span class="error-level">{{ error.level === 'error' ? '❌' : '⚠️' }}</span>
-                            <span class="error-message">{{ error.message }}</span>
-                          </div>
-                          @if (error.row >= 0 || error.column) {
-                            <div class="error-location">
-                              @if (error.row >= 0) {
-                                <button class="link-btn" (click)="jumpToValidationError(error)">
-                                  Row {{ error.row + 1 }}@if (error.column) {, {{ error.column }}}
-                                </button>
-                              } @else if (error.column) {
-                                <span>Column: {{ error.column }}</span>
-                              }
-                              @if (error.value) {
-                                <span class="error-value">Value: "{{ error.value }}"</span>
-                              }
-                            </div>
-                          }
-                          @if (error.suggestion) {
-                            <div class="error-suggestion">💡 {{ error.suggestion }}</div>
-                          }
-                        </div>
-                      }
-                    </div>
-                  </div>
-                } @else if (pyodideHasValidated() && pyodideErrors().length === 0 && !pyodideValidating()) {
-                  <div class="validation-empty">
-                    <p class="success-msg">✅ No validation errors found!</p>
-                  </div>
-                }
-              </div>
             </div>
           }
 
@@ -1754,242 +1624,6 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
       margin-bottom: 0;
     }
 
-    /* Pyodide Validation Section */
-    .pyodide-section {
-      padding: 16px;
-      border-top: 1px solid #e5e7eb;
-      margin-top: 12px;
-    }
-
-    .pyodide-section .section-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-
-    .pyodide-section .section-header h4 {
-      margin: 0;
-      font-size: 13px;
-      font-weight: 600;
-      color: #374151;
-    }
-
-    .pyodide-badge {
-      font-size: 10px;
-      padding: 2px 8px;
-      border-radius: 10px;
-      font-weight: 500;
-    }
-
-    .badge-info { background: #e0e7ff; color: #4338ca; }
-    .badge-loading { background: #fef3c7; color: #d97706; }
-    .badge-ready { background: #d1fae5; color: #059669; }
-    .badge-error { background: #fee2e2; color: #dc2626; }
-
-    .pyodide-info {
-      font-size: 12px;
-      color: #6b7280;
-      margin-bottom: 12px;
-    }
-
-    .pyodide-info p {
-      margin: 0 0 6px 0;
-    }
-
-    .pyodide-note {
-      font-size: 11px;
-      color: #9ca3af;
-      font-style: italic;
-    }
-
-    .pyodide-loading {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 12px;
-      background: #fef3c7;
-      border-radius: 8px;
-      margin-bottom: 12px;
-    }
-
-    .pyodide-loading .progress-text {
-      font-size: 12px;
-      color: #92400e;
-    }
-
-    .template-selector {
-      margin-bottom: 12px;
-    }
-
-    .template-selector label {
-      display: block;
-      font-size: 11px;
-      color: #6b7280;
-      margin-bottom: 8px;
-    }
-
-    .template-checkboxes {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
-    .template-option {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 11px;
-      color: #374151;
-      cursor: pointer;
-      padding: 4px 8px;
-      background: #f3f4f6;
-      border-radius: 4px;
-      transition: background 0.2s;
-    }
-
-    .template-option:hover {
-      background: #e5e7eb;
-    }
-
-    .template-option input[type="checkbox"] {
-      margin: 0;
-    }
-
-    .pyodide-error {
-      padding: 12px;
-      background: #fee2e2;
-      border-radius: 8px;
-      margin-bottom: 12px;
-    }
-
-    .pyodide-error p {
-      margin: 0 0 8px 0;
-      font-size: 12px;
-      color: #b91c1c;
-    }
-
-    .validation-results {
-      margin-top: 16px;
-    }
-
-    .validation-summary {
-      display: flex;
-      gap: 12px;
-      margin-bottom: 12px;
-    }
-
-    .error-count {
-      font-size: 12px;
-      font-weight: 600;
-      color: #dc2626;
-      background: #fee2e2;
-      padding: 4px 10px;
-      border-radius: 12px;
-    }
-
-    .warning-count {
-      font-size: 12px;
-      font-weight: 600;
-      color: #d97706;
-      background: #fef3c7;
-      padding: 4px 10px;
-      border-radius: 12px;
-    }
-
-    .validation-errors-list {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      max-height: 300px;
-      overflow-y: auto;
-    }
-
-    .validation-error {
-      padding: 10px 12px;
-      background: #f9fafb;
-      border: 1px solid #e5e7eb;
-      border-radius: 6px;
-      border-left: 3px solid #9ca3af;
-    }
-
-    .validation-error.level-error {
-      border-left-color: #dc2626;
-      background: #fef2f2;
-    }
-
-    .validation-error.level-warning {
-      border-left-color: #f59e0b;
-      background: #fffbeb;
-    }
-
-    .error-header {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      margin-bottom: 6px;
-    }
-
-    .error-level {
-      flex-shrink: 0;
-    }
-
-    .error-message {
-      font-size: 12px;
-      color: #374151;
-      word-break: break-word;
-    }
-
-    .error-location {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 11px;
-      color: #6b7280;
-      margin-bottom: 4px;
-    }
-
-    .link-btn {
-      background: none;
-      border: none;
-      padding: 0;
-      color: #667eea;
-      cursor: pointer;
-      font-size: 11px;
-      text-decoration: underline;
-    }
-
-    .link-btn:hover {
-      color: #4f46e5;
-    }
-
-    .error-value {
-      font-family: monospace;
-      font-size: 10px;
-      background: #f3f4f6;
-      padding: 2px 6px;
-      border-radius: 3px;
-    }
-
-    .error-suggestion {
-      font-size: 11px;
-      color: #059669;
-      background: #f0fdf4;
-      padding: 6px 8px;
-      border-radius: 4px;
-      margin-top: 6px;
-    }
-
-    .validation-empty {
-      text-align: center;
-      padding: 16px;
-    }
-
-    .success-msg {
-      font-size: 13px;
-      color: #059669;
-      font-weight: 500;
-    }
   `],
 })
 export class SdrfRecommendPanelComponent implements OnChanges {
@@ -2310,6 +1944,8 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
   onApplyClick(rec: SdrfRecommendation): void {
     rec.applied = true;
     this.applyRecommendation.emit({ recommendation: rec });
+    // Force signal update to refresh counters
+    this.result.update(r => r ? { ...r } : null);
   }
 
   onPreviewClick(rec: SdrfRecommendation): void {
@@ -2326,12 +1962,16 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
     const highConf = this.filteredRecommendations().filter(r => !r.applied && r.confidence === 'high');
     for (const rec of highConf) rec.applied = true;
     this.batchApply.emit({ recommendations: highConf });
+    // Force signal update to refresh counters
+    this.result.update(r => r ? { ...r } : null);
   }
 
   applyAll(): void {
     const toApply = this.filteredRecommendations().filter(r => !r.applied);
     for (const rec of toApply) rec.applied = true;
     this.batchApply.emit({ recommendations: toApply });
+    // Force signal update to refresh counters
+    this.result.update(r => r ? { ...r } : null);
   }
 
   // Quality methods
