@@ -36,9 +36,27 @@ import { SdrfCellEditorComponent } from '../sdrf-cell-editor/sdrf-cell-editor.co
 import { SdrfColumnStatsComponent, SelectByValueEvent, BulkEditEvent } from '../sdrf-column-stats/sdrf-column-stats.component';
 import { SdrfBulkToolbarComponent, BulkColumnEditEvent } from '../sdrf-bulk-toolbar/sdrf-bulk-toolbar.component';
 import { SdrfFilterBarComponent, FilterResult } from '../sdrf-filter-bar/sdrf-filter-bar.component';
-import { SdrfRecommendPanelComponent, ApplyRecommendationEvent, BatchApplyEvent } from '../sdrf-recommend-panel/sdrf-recommend-panel.component';
+import { SdrfRecommendPanelComponent, ApplyRecommendationEvent, BatchApplyEvent, ApplyFixEvent } from '../sdrf-recommend-panel/sdrf-recommend-panel.component';
 import { LlmSettingsDialogComponent } from '../llm-settings/llm-settings-dialog.component';
+import { SdrfWizardComponent } from '../sdrf-wizard/sdrf-wizard.component';
 import { SdrfRecommendation } from '../../core/models/llm';
+import {
+  PyodideValidatorService,
+  pyodideValidatorService,
+  ValidationError,
+} from '../../core/services/pyodide-validator.service';
+import { sdrfExport } from '../../core/services/sdrf-export.service';
+
+/**
+ * Aggregated validation error - groups errors with the same message
+ */
+export interface AggregatedValidationError {
+  message: string;
+  level: 'error' | 'warning';
+  column: string | null;
+  cells: Array<{ row: number; value: string | null }>;
+  suggestion: string | null;
+}
 
 /**
  * Cell selection state.
@@ -57,7 +75,7 @@ const BUFFER_ROWS = 10;
 @Component({
   selector: 'sdrf-editor',
   standalone: true,
-  imports: [CommonModule, FormsModule, SdrfCellEditorComponent, SdrfColumnStatsComponent, SdrfBulkToolbarComponent, SdrfFilterBarComponent, SdrfRecommendPanelComponent, LlmSettingsDialogComponent],
+  imports: [CommonModule, FormsModule, SdrfCellEditorComponent, SdrfColumnStatsComponent, SdrfBulkToolbarComponent, SdrfFilterBarComponent, SdrfRecommendPanelComponent, LlmSettingsDialogComponent, SdrfWizardComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="sdrf-editor" [class.loading]="loading()">
@@ -73,6 +91,9 @@ const BUFFER_ROWS = 10;
           />
           <button class="btn btn-primary" (click)="fileInput.click()">
             Import File
+          </button>
+          <button class="btn btn-create" (click)="openWizard()">
+            Create New
           </button>
 
           @if (table()) {
@@ -113,14 +134,10 @@ const BUFFER_ROWS = 10;
         <div class="toolbar-right">
           @if (table()) {
             <div class="column-legend">
-              <span class="legend-item source">Source</span>
-              <span class="legend-item assay">Assay</span>
-              <span class="legend-item characteristic">Characteristics</span>
+              <span class="legend-item source">Sample Accession</span>
+              <span class="legend-item characteristic">Sample Properties</span>
+              <span class="legend-item comment">Data Properties</span>
               <span class="legend-item factor">Factor Values</span>
-              <span class="legend-item comment">Comments</span>
-              <span class="legend-item data">Data</span>
-              <span class="legend-item technical">Technical</span>
-              <span class="legend-item other">Other</span>
             </div>
             <span class="table-info">
               {{ table()!.columns.length }} columns,
@@ -171,104 +188,109 @@ const BUFFER_ROWS = 10;
       @if (table()) {
         <div class="sdrf-content">
           <!-- Table and sidebar row -->
-          <div class="table-row" [class.with-sidebar]="showStatsPanel() || showRecommendPanel()">
+          <div class="table-row" [class.with-sidebar]="showStatsPanel()">
             <!-- Virtual scrolling table container -->
             <div
               class="sdrf-table-container"
               #scrollContainer
               (scroll)="onScroll($event)"
             >
-            <!-- Sticky header table (outside transform for proper sticky behavior) -->
-            <table class="sdrf-table sdrf-header-table">
-              <thead>
-                <tr>
-                  <th class="row-header checkbox-col">
-                    <input
-                      type="checkbox"
-                      [checked]="isAllVisibleSelected()"
-                      [indeterminate]="isSomeVisibleSelected()"
-                      (change)="toggleSelectAllVisible()"
-                      title="Select all visible rows"
-                    />
-                  </th>
-                  <th class="row-header">#</th>
-                  @for (column of table()!.columns; track column.columnPosition) {
-                    <th
-                      [class]="'col-type-' + getColumnTypeClass(column.name)"
-                      [class.required]="column.isRequired"
-                      [class.selected]="selectedCell()?.col === column.columnPosition"
-                      [class.sorted]="sortColumn() === column.columnPosition"
-                      (click)="onHeaderClick(column.columnPosition, $event)"
-                    >
-                      <span class="col-type-indicator"></span>
-                      <span class="col-name">{{ column.name }}</span>
-                      @if (column.isRequired) {
-                        <span class="required-marker">*</span>
-                      }
-                      @if (sortColumn() === column.columnPosition) {
-                        <span class="sort-indicator">{{ sortDirection() === 'asc' ? '▲' : '▼' }}</span>
-                      }
-                    </th>
-                  }
-                </tr>
-              </thead>
-            </table>
-
-            <!-- Spacer for total scroll height -->
-            <div
-              class="scroll-spacer"
-              [style.height.px]="totalHeight()"
-            >
-              <!-- Body table positioned at scroll offset -->
-              <table
-                class="sdrf-table sdrf-body-table"
-                [style.transform]="'translateY(' + tableOffset() + 'px)'"
-              >
-                <tbody>
-                  @for (rowIndex of visibleRows(); track rowIndex) {
-                    <tr
-                      [class.selected]="selectedCell()?.row === rowIndex"
-                      [class.row-selected]="isRowSelected(rowIndex)"
-                      [style.height.px]="ROW_HEIGHT"
-                    >
-                      <td class="row-header checkbox-col">
+              <!-- Single table with sticky header -->
+              <div class="table-scroll-area" [style.height.px]="totalHeight() + 40">
+                <table class="sdrf-table">
+                  <!-- Column group to ensure consistent widths -->
+                  <colgroup>
+                    <col class="col-checkbox" />
+                    <col class="col-rownum" />
+                    @for (column of table()!.columns; track column.name) {
+                      <col class="col-data" />
+                    }
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th class="row-header checkbox-col">
                         <input
                           type="checkbox"
-                          [checked]="isRowSelected(rowIndex)"
-                          (change)="toggleRowSelection(rowIndex, $event)"
-                          (click)="$event.stopPropagation()"
+                          [checked]="isAllVisibleSelected()"
+                          [indeterminate]="isSomeVisibleSelected()"
+                          (change)="toggleSelectAllVisible()"
+                          title="Select all visible rows"
                         />
-                      </td>
-                      <td class="row-header" (click)="onRowHeaderClick(rowIndex, $event)">
-                        {{ rowIndex }}
-                      </td>
-                      @for (column of table()!.columns; track column.columnPosition) {
-                        <td
-                          [class.selected]="isSelected(rowIndex, column.columnPosition)"
-                          [class.has-error]="hasCellError(rowIndex, column.columnPosition)"
-                          (click)="selectCell(rowIndex, column.columnPosition)"
-                          (dblclick)="startEditing(rowIndex, column.columnPosition)"
-                          (contextmenu)="onCellContextMenu($event, rowIndex, column.columnPosition)"
+                      </th>
+                      <th class="row-header">#</th>
+                      @for (column of table()!.columns; track column.name; let colIdx = $index) {
+                        <th
+                          class="data-col"
+                          [class.col-type-source]="getColumnTypeClass(column.name) === 'source'"
+                          [class.col-type-characteristic]="getColumnTypeClass(column.name) === 'characteristic'"
+                          [class.col-type-comment]="getColumnTypeClass(column.name) === 'comment'"
+                          [class.col-type-factor]="getColumnTypeClass(column.name) === 'factor'"
+                          [class.required]="column.isRequired"
+                          [class.selected]="selectedCell()?.col === colIdx"
+                          [class.sorted]="sortColumn() === colIdx"
+                          (click)="onHeaderClick(colIdx, $event)"
                         >
-                          <span
-                            class="cell-value"
-                            [class.reserved-value]="isReservedValue(getCellValue(rowIndex, column.columnPosition))"
-                            [class.reserved-not-available]="isReservedValueType(getCellValue(rowIndex, column.columnPosition), 'not available')"
-                            [class.reserved-not-applicable]="isReservedValueType(getCellValue(rowIndex, column.columnPosition), 'not applicable')"
-                            [class.reserved-anonymized]="isReservedValueType(getCellValue(rowIndex, column.columnPosition), 'anonymized')"
-                            [class.reserved-pooled]="isReservedValueType(getCellValue(rowIndex, column.columnPosition), 'pooled')"
-                          >
-                            {{ getCellValue(rowIndex, column.columnPosition) }}
-                          </span>
-                        </td>
+                          <span class="col-name">{{ column.name }}</span>
+                          @if (column.isRequired) {
+                            <span class="required-marker">*</span>
+                          }
+                          @if (sortColumn() === colIdx) {
+                            <span class="sort-indicator">{{ sortDirection() === 'asc' ? '▲' : '▼' }}</span>
+                          }
+                        </th>
                       }
                     </tr>
-                  }
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    <!-- Virtual scroll spacer - invisible row for scroll offset -->
+                    @if (tableOffset() > 0) {
+                      <tr class="virtual-spacer" [style.height.px]="tableOffset()">
+                        <td [attr.colspan]="(table()?.columns?.length || 0) + 2"></td>
+                      </tr>
+                    }
+                    @for (rowIndex of visibleRows(); track rowIndex) {
+                      <tr
+                        [class.selected]="selectedCell()?.row === rowIndex"
+                        [class.row-selected]="isRowSelected(rowIndex)"
+                        [style.height.px]="ROW_HEIGHT"
+                      >
+                        <td class="row-header checkbox-col">
+                          <input
+                            type="checkbox"
+                            [checked]="isRowSelected(rowIndex)"
+                            (change)="toggleRowSelection(rowIndex, $event)"
+                            (click)="$event.stopPropagation()"
+                          />
+                        </td>
+                        <td class="row-header" (click)="onRowHeaderClick(rowIndex, $event)">
+                          {{ rowIndex }}
+                        </td>
+                        @for (column of table()!.columns; track column.name; let colIdx = $index) {
+                          <td
+                            [class.selected]="isSelected(rowIndex, colIdx)"
+                            [class.has-error]="hasCellError(rowIndex, colIdx)"
+                            (click)="selectCell(rowIndex, colIdx)"
+                            (dblclick)="startEditing(rowIndex, colIdx)"
+                            (contextmenu)="onCellContextMenu($event, rowIndex, colIdx)"
+                          >
+                            <span
+                              class="cell-value"
+                              [class.reserved-value]="isReservedValue(getCellValue(rowIndex, colIdx))"
+                              [class.reserved-not-available]="isReservedValueType(getCellValue(rowIndex, colIdx), 'not available')"
+                              [class.reserved-not-applicable]="isReservedValueType(getCellValue(rowIndex, colIdx), 'not applicable')"
+                              [class.reserved-anonymized]="isReservedValueType(getCellValue(rowIndex, colIdx), 'anonymized')"
+                              [class.reserved-pooled]="isReservedValueType(getCellValue(rowIndex, colIdx), 'pooled')"
+                            >
+                              {{ getCellValue(rowIndex, colIdx) }}
+                            </span>
+                          </td>
+                        }
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
             </div>
-
-          </div>
 
           <!-- Stats Panel Sidebar -->
           @if (showStatsPanel()) {
@@ -299,57 +321,118 @@ const BUFFER_ROWS = 10;
             <button class="btn btn-small" (click)="jumpToRow()">Go</button>
           </div>
 
-          <!-- Validation panel -->
-          @if (validationResult()) {
-            <div class="validation-panel" [class.has-errors]="!validationResult()!.isValid">
-              <div class="validation-header">
-                <h3>
-                  @if (validationResult()!.isValid) {
-                    ✓ Validation Passed
-                  } @else {
-                    ✗ Validation Failed
+          <!-- Validation Panel (Pyodide-based) -->
+          @if (showValidationPanel()) {
+            <div class="validation-panel-container">
+              <div class="validation-panel-header">
+                <div class="validation-title">
+                  <h3>SDRF Validation</h3>
+                  @if (pyodideState() === 'loading') {
+                    <span class="pyodide-status loading">{{ pyodideLoadProgress() }}</span>
+                  } @else if (pyodideState() === 'ready') {
+                    <span class="pyodide-status ready">Ready</span>
+                  } @else if (pyodideState() === 'error') {
+                    <span class="pyodide-status error">Error</span>
                   }
-                </h3>
-                <button class="btn-close" (click)="clearValidation()">×</button>
+                </div>
+                <button class="btn-close" (click)="closeValidationPanel()">×</button>
               </div>
 
-              @if (validationResult()!.errors.length > 0) {
-                <div class="validation-errors">
-                  <h4>Errors ({{ validationResult()!.errors.length }})</h4>
-                  <ul>
-                    @for (err of validationResult()!.errors.slice(0, 20); track $index) {
-                      <li class="error">
-                        @if (err.column) {
-                          <strong>{{ err.column }}:</strong>
-                        }
-                        {{ err.message }}
-                      </li>
+              <div class="validation-panel-body">
+                <!-- Template Selector -->
+                <div class="template-selector-row">
+                  <span class="template-label">Templates:</span>
+                  <div class="template-chips">
+                    @for (template of pyodideAvailableTemplates().length > 0 ? pyodideAvailableTemplates() : ['default', 'human', 'vertebrates', 'nonvertebrates', 'plants', 'cell_lines']; track template) {
+                      <label class="template-chip" [class.selected]="selectedTemplates().includes(template)">
+                        <input
+                          type="checkbox"
+                          [checked]="selectedTemplates().includes(template)"
+                          (change)="toggleTemplate(template)"
+                        />
+                        {{ template }}
+                      </label>
                     }
-                    @if (validationResult()!.errors.length > 20) {
-                      <li class="more">... and {{ validationResult()!.errors.length - 20 }} more errors</li>
+                  </div>
+                  <button
+                    class="btn btn-primary btn-sm"
+                    [disabled]="pyodideValidating() || selectedTemplates().length === 0"
+                    (click)="runPyodideValidation()"
+                  >
+                    @if (pyodideValidating()) {
+                      <span class="spinner-sm"></span> Validating...
+                    } @else if (pyodideState() === 'not-loaded') {
+                      Load & Validate
+                    } @else {
+                      Validate
                     }
-                  </ul>
+                  </button>
                 </div>
-              }
 
-              @if (validationResult()!.warnings.length > 0) {
-                <div class="validation-warnings">
-                  <h4>Warnings ({{ validationResult()!.warnings.length }})</h4>
-                  <ul>
-                    @for (warning of validationResult()!.warnings.slice(0, 10); track $index) {
-                      <li class="warning">
-                        @if (warning.column) {
-                          <strong>{{ warning.column }}:</strong>
-                        }
-                        {{ warning.message }}
-                      </li>
+                <!-- Results Summary -->
+                @if (pyodideHasValidated() && !pyodideValidating()) {
+                  <div class="validation-summary-row">
+                    @if (pyodideErrorCount() === 0 && pyodideWarningCount() === 0) {
+                      <span class="validation-success">✓ Validation passed - no issues found</span>
+                    } @else {
+                      @if (pyodideErrorCount() > 0) {
+                        <span class="error-badge">{{ pyodideErrorCount() }} errors</span>
+                      }
+                      @if (pyodideWarningCount() > 0) {
+                        <span class="warning-badge">{{ pyodideWarningCount() }} warnings</span>
+                      }
                     }
-                    @if (validationResult()!.warnings.length > 10) {
-                      <li class="more">... and {{ validationResult()!.warnings.length - 10 }} more warnings</li>
+                  </div>
+                }
+
+                <!-- Aggregated Errors List -->
+                @if (aggregatedErrors().length > 0) {
+                  <div class="validation-errors-list">
+                    @for (error of aggregatedErrors(); track $index) {
+                      <div class="validation-error-card" [class.level-error]="error.level === 'error'" [class.level-warning]="error.level === 'warning'">
+                        <div class="error-main">
+                          <span class="error-icon">{{ error.level === 'error' ? '❌' : '⚠️' }}</span>
+                          <div class="error-content">
+                            <div class="error-message">{{ error.message }}</div>
+                            @if (error.column) {
+                              <div class="error-column">Column: <strong>{{ error.column }}</strong></div>
+                            }
+                            @if (error.cells.length > 0) {
+                              <div class="error-cells">
+                                <span class="cells-label">Affected rows:</span>
+                                <div class="cells-list">
+                                  @for (cell of error.cells.slice(0, 8); track $index) {
+                                    <button class="cell-link" (click)="jumpToValidationCell(cell.row, error.column)">
+                                      {{ cell.row + 1 }}
+                                    </button>
+                                  }
+                                  @if (error.cells.length > 8) {
+                                    <span class="cells-more">+{{ error.cells.length - 8 }} more</span>
+                                  }
+                                </div>
+                              </div>
+                            }
+                            @if (error.suggestion) {
+                              <div class="error-suggestion">💡 {{ error.suggestion }}</div>
+                            }
+                          </div>
+                          <button class="btn btn-ai-assist" (click)="sendErrorToAI(error)" title="Ask AI for help">
+                            AI Assist
+                          </button>
+                        </div>
+                      </div>
                     }
-                  </ul>
-                </div>
-              }
+                  </div>
+                }
+
+                <!-- Loading state -->
+                @if (pyodideValidating()) {
+                  <div class="validation-loading">
+                    <span class="spinner"></span>
+                    <span>Running validation...</span>
+                  </div>
+                }
+              </div>
             </div>
           }
 
@@ -379,17 +462,23 @@ const BUFFER_ROWS = 10;
             </div>
           }
 
-          <!-- AI Recommend Panel Sidebar -->
-          @if (showRecommendPanel()) {
+        </div>
+
+        <!-- AI Recommend Panel - Slide-in from right -->
+        <div class="ai-panel-container" [class.open]="showRecommendPanel()">
+          <div class="ai-panel-backdrop" (click)="toggleRecommendPanel()"></div>
+          <div class="ai-panel-wrapper">
             <sdrf-recommend-panel
               [table]="table()"
+              [incomingChatMessage]="pendingChatMessage()"
               (close)="toggleRecommendPanel()"
               (openSettings)="openLlmSettings()"
               (applyRecommendation)="onApplyRecommendation($event)"
               (batchApply)="onBatchApplyRecommendations($event)"
               (previewRecommendation)="onPreviewRecommendation($event)"
+              (applyFix)="onApplyFix($event)"
             ></sdrf-recommend-panel>
-          }
+          </div>
         </div>
       } @else if (!loading() && !error()) {
         <div class="empty-state">
@@ -428,6 +517,15 @@ const BUFFER_ROWS = 10;
           (close)="closeLlmSettings()"
           (settingsSaved)="onLlmSettingsSaved()"
         ></llm-settings-dialog>
+      }
+
+      <!-- SDRF Creation Wizard -->
+      @if (showWizard()) {
+        <sdrf-wizard
+          [aiEnabled]="isAiConfigured()"
+          (complete)="onWizardComplete($event)"
+          (cancel)="closeWizard()"
+        />
       }
     </div>
   `,
@@ -504,6 +602,16 @@ const BUFFER_ROWS = 10;
       background: #5a6268;
     }
 
+    .btn-create {
+      background: #10b981;
+      color: white;
+      border-color: #10b981;
+    }
+
+    .btn-create:hover {
+      background: #059669;
+    }
+
     .btn-small {
       padding: 4px 8px;
       font-size: 12px;
@@ -534,19 +642,9 @@ const BUFFER_ROWS = 10;
       background: rgba(76, 175, 80, 0.1);
     }
 
-    .legend-item.assay {
-      border-left-color: #9c27b0;
-      background: rgba(156, 39, 176, 0.1);
-    }
-
     .legend-item.characteristic {
       border-left-color: #2196f3;
       background: rgba(33, 150, 243, 0.1);
-    }
-
-    .legend-item.factor {
-      border-left-color: #ff9800;
-      background: rgba(255, 152, 0, 0.1);
     }
 
     .legend-item.comment {
@@ -554,19 +652,9 @@ const BUFFER_ROWS = 10;
       background: rgba(158, 158, 158, 0.1);
     }
 
-    .legend-item.data {
-      border-left-color: #009688;
-      background: rgba(0, 150, 136, 0.1);
-    }
-
-    .legend-item.technical {
-      border-left-color: #607d8b;
-      background: rgba(96, 125, 139, 0.1);
-    }
-
-    .legend-item.other {
-      border-left-color: #8d6e63;
-      background: rgba(141, 110, 99, 0.1);
+    .legend-item.factor {
+      border-left-color: #ff9800;
+      background: rgba(255, 152, 0, 0.1);
     }
 
     .loading-overlay {
@@ -649,7 +737,7 @@ const BUFFER_ROWS = 10;
       min-height: 0;
     }
 
-    .scroll-spacer {
+    .table-scroll-area {
       position: relative;
       width: fit-content;
       min-width: 100%;
@@ -658,23 +746,56 @@ const BUFFER_ROWS = 10;
     .sdrf-table {
       border-collapse: collapse;
       font-size: 13px;
-      position: relative;
-      table-layout: fixed;
+      table-layout: auto;
       width: max-content;
       min-width: 100%;
     }
 
-    /* Sticky header table - stays at top during scroll */
-    .sdrf-header-table {
+    /* Colgroup for consistent column widths */
+    .sdrf-table colgroup .col-checkbox {
+      width: 36px;
+      min-width: 36px;
+    }
+
+    .sdrf-table colgroup .col-rownum {
+      width: 60px;
+      min-width: 60px;
+    }
+
+    .sdrf-table colgroup .col-data {
+      min-width: 120px;
+    }
+
+    /* Sticky header */
+    .sdrf-table thead {
       position: sticky;
       top: 0;
-      z-index: 20;
+      z-index: 10;
+    }
+
+    .sdrf-table thead tr {
       background: #f8f9fa;
     }
 
-    /* Body table uses transform for virtual scrolling */
-    .sdrf-body-table {
-      will-change: transform;
+    .sdrf-table thead th {
+      background: #f8f9fa;
+    }
+
+    /* Virtual scroll spacer row - invisible placeholder for scroll offset */
+    .sdrf-table .virtual-spacer {
+      height: 0;
+      padding: 0 !important;
+      border: none !important;
+      line-height: 0;
+      font-size: 0;
+      visibility: hidden;
+    }
+
+    .sdrf-table .virtual-spacer td {
+      padding: 0 !important;
+      border: none !important;
+      height: inherit;
+      line-height: 0;
     }
 
     .sdrf-table th,
@@ -697,7 +818,17 @@ const BUFFER_ROWS = 10;
     }
 
     .sdrf-table th.required {
-      background: #fff3cd;
+      background: #fff3cd !important;
+    }
+
+    .sdrf-table th.selected {
+      background: #e3f2fd !important;
+      outline: 2px solid #2196f3;
+      outline-offset: -2px;
+    }
+
+    .sdrf-table th.sorted {
+      background: #e3f2fd !important;
     }
 
     .required-marker {
@@ -717,8 +848,9 @@ const BUFFER_ROWS = 10;
       z-index: 5;
     }
 
-    .sdrf-header-table .row-header {
-      z-index: 25;
+    .sdrf-table thead .row-header {
+      z-index: 15;
+      background: #f8f9fa;
     }
 
     .checkbox-col {
@@ -875,56 +1007,277 @@ const BUFFER_ROWS = 10;
       font-size: 13px;
     }
 
-    .validation-panel {
-      padding: 16px;
-      border-top: 1px solid #ddd;
+    /* New Validation Panel (Pyodide-based) */
+    .validation-panel-container {
+      border-top: 2px solid #667eea;
       background: #f8f9fa;
-      max-height: 200px;
-      overflow-y: auto;
+      max-height: 300px;
+      display: flex;
+      flex-direction: column;
       flex-shrink: 0;
     }
 
-    .validation-panel.has-errors {
-      background: #fff5f5;
-    }
-
-    .validation-header {
+    .validation-panel-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 12px;
+      padding: 10px 16px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
     }
 
-    .validation-header h3 {
+    .validation-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .validation-title h3 {
       margin: 0;
       font-size: 14px;
-    }
-
-    .validation-errors h4,
-    .validation-warnings h4 {
-      margin: 0 0 8px 0;
-      font-size: 13px;
       font-weight: 600;
     }
 
-    .validation-errors ul,
-    .validation-warnings ul {
+    .pyodide-status {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.2);
+    }
+
+    .pyodide-status.loading { background: #fef3c7; color: #92400e; }
+    .pyodide-status.ready { background: #d1fae5; color: #059669; }
+    .pyodide-status.error { background: #fee2e2; color: #b91c1c; }
+
+    .validation-panel-body {
+      padding: 12px 16px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .template-selector-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+
+    .template-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: #4b5563;
+    }
+
+    .template-chips {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      flex: 1;
+    }
+
+    .template-chip {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      background: white;
+      border: 1px solid #d1d5db;
+      border-radius: 16px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .template-chip:hover {
+      background: #f3f4f6;
+    }
+
+    .template-chip.selected {
+      background: #e0e7ff;
+      border-color: #667eea;
+      color: #4338ca;
+    }
+
+    .template-chip input {
       margin: 0;
-      padding-left: 20px;
+      width: 12px;
+      height: 12px;
     }
 
-    .validation-errors li {
+    .btn-sm {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    .spinner-sm {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid #fff;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    .validation-summary-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding: 8px 12px;
+      background: white;
+      border-radius: 6px;
+    }
+
+    .validation-success {
+      color: #059669;
+      font-weight: 500;
+      font-size: 13px;
+    }
+
+    .error-badge {
+      background: #fee2e2;
       color: #b91c1c;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
     }
 
-    .validation-warnings li {
-      color: #b45309;
+    .warning-badge {
+      background: #fef3c7;
+      color: #92400e;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
     }
 
-    .validation-errors li.more,
-    .validation-warnings li.more {
-      font-style: italic;
-      opacity: 0.8;
+    .validation-errors-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .validation-error-card {
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      border-left: 4px solid #9ca3af;
+      overflow: hidden;
+    }
+
+    .validation-error-card.level-error {
+      border-left-color: #dc2626;
+    }
+
+    .validation-error-card.level-warning {
+      border-left-color: #f59e0b;
+    }
+
+    .error-main {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+    }
+
+    .error-icon {
+      flex-shrink: 0;
+      font-size: 14px;
+    }
+
+    .error-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .error-message {
+      font-size: 13px;
+      color: #374151;
+      margin-bottom: 4px;
+    }
+
+    .error-column {
+      font-size: 11px;
+      color: #6b7280;
+      margin-bottom: 4px;
+    }
+
+    .error-cells {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+
+    .cells-label {
+      font-size: 11px;
+      color: #6b7280;
+    }
+
+    .cells-list {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .cell-link {
+      background: #f3f4f6;
+      border: none;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      color: #667eea;
+      cursor: pointer;
+      font-family: monospace;
+    }
+
+    .cell-link:hover {
+      background: #e0e7ff;
+      text-decoration: underline;
+    }
+
+    .cells-more {
+      font-size: 11px;
+      color: #9ca3af;
+    }
+
+    .error-suggestion {
+      font-size: 11px;
+      color: #059669;
+      background: #f0fdf4;
+      padding: 4px 8px;
+      border-radius: 4px;
+      margin-top: 4px;
+    }
+
+    .btn-ai-assist {
+      flex-shrink: 0;
+      padding: 6px 12px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .btn-ai-assist:hover {
+      opacity: 0.9;
+    }
+
+    .validation-loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 20px;
+      color: #6b7280;
+      font-size: 13px;
     }
 
     .empty-state {
@@ -946,64 +1299,33 @@ const BUFFER_ROWS = 10;
       color: #999;
     }
 
-    /* Column type indicators - subtle left border style */
-    .col-type-indicator {
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      width: 3px;
-    }
-
-    .sdrf-table th {
-      padding-left: 10px;
+    /* Column type styling - left border indicates column type */
+    .sdrf-table th.data-col {
+      position: relative;
+      border-left: 4px solid #8d6e63;
     }
 
     .sdrf-table th .col-name {
       display: inline;
     }
 
-    /* Source Name / Sample Name - Green */
-    .col-type-source .col-type-indicator { background: #4caf50; }
-    .col-type-source { border-left: 3px solid #4caf50; }
+    /* Sample Accession (source name) - Green */
+    .sdrf-table th.col-type-source { border-left-color: #4caf50; background: rgba(76, 175, 80, 0.05); }
 
-    /* Assay Name / MS Run - Purple */
-    .col-type-assay .col-type-indicator { background: #9c27b0; }
-    .col-type-assay { border-left: 3px solid #9c27b0; }
+    /* Sample Properties (characteristics) - Blue */
+    .sdrf-table th.col-type-characteristic { border-left-color: #2196f3; background: rgba(33, 150, 243, 0.05); }
 
-    /* Characteristics - Blue */
-    .col-type-characteristic .col-type-indicator { background: #2196f3; }
-    .col-type-characteristic { border-left: 3px solid #2196f3; }
+    /* Data Properties (comments, assay, files, technical) - Gray */
+    .sdrf-table th.col-type-comment { border-left-color: #9e9e9e; background: rgba(158, 158, 158, 0.05); }
 
-    /* Factor Value - Orange */
-    .col-type-factor .col-type-indicator { background: #ff9800; }
-    .col-type-factor { border-left: 3px solid #ff9800; }
-
-    /* Comment - Gray */
-    .col-type-comment .col-type-indicator { background: #9e9e9e; }
-    .col-type-comment { border-left: 3px solid #9e9e9e; }
-
-    /* Data/File columns - Teal */
-    .col-type-data .col-type-indicator { background: #009688; }
-    .col-type-data { border-left: 3px solid #009688; }
-
-    /* Technical/Protocol columns - Blue Gray */
-    .col-type-technical .col-type-indicator { background: #607d8b; }
-    .col-type-technical { border-left: 3px solid #607d8b; }
-
-    /* Other/Unknown - Brown/Tan (distinct from gray) */
-    .col-type-other .col-type-indicator { background: #8d6e63; }
-    .col-type-other { border-left: 3px solid #8d6e63; }
+    /* Factor Values - Orange */
+    .sdrf-table th.col-type-factor { border-left-color: #ff9800; background: rgba(255, 152, 0, 0.05); }
 
     /* Sort indicator */
     .sort-indicator {
       margin-left: 4px;
       font-size: 10px;
       color: #1976d2;
-    }
-
-    .sdrf-table th.sorted {
-      background: #e3f2fd;
     }
 
     .sdrf-table th:hover {
@@ -1039,6 +1361,59 @@ const BUFFER_ROWS = 10;
       background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%) !important;
       border-color: #5a67d8 !important;
       box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.3);
+    }
+
+    /* AI Panel Slide-in Container */
+    .ai-panel-container {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 100;
+      pointer-events: none;
+      visibility: hidden;
+    }
+
+    .ai-panel-container.open {
+      pointer-events: auto;
+      visibility: visible;
+    }
+
+    .ai-panel-backdrop {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.3);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .ai-panel-container.open .ai-panel-backdrop {
+      opacity: 1;
+    }
+
+    .ai-panel-wrapper {
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 420px;
+      max-width: 90vw;
+      transform: translateX(100%);
+      transition: transform 0.3s ease;
+      box-shadow: -4px 0 20px rgba(0, 0, 0, 0.15);
+    }
+
+    .ai-panel-container.open .ai-panel-wrapper {
+      transform: translateX(0);
+    }
+
+    .ai-panel-wrapper sdrf-recommend-panel {
+      display: block;
+      height: 100%;
     }
 
     tr.row-selected td {
@@ -1161,8 +1536,45 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   /** Whether LLM settings dialog is visible */
   showLlmSettingsDialog = signal(false);
 
+  /** Whether SDRF creation wizard is visible */
+  showWizard = signal(false);
+
+  /** Whether validation panel is visible */
+  showValidationPanel = signal(false);
+
+  // ============ Pyodide Validation State ============
+
+  private pyodideService: PyodideValidatorService;
+
+  /** Pyodide validation in progress */
+  pyodideValidating = signal(false);
+
+  /** Pyodide validation errors */
+  pyodideErrors = signal<ValidationError[]>([]);
+
+  /** Whether Pyodide validation has been run */
+  pyodideHasValidated = signal(false);
+
+  /** Selected templates for validation */
+  selectedTemplates = signal<string[]>(['default']);
+
+  /** Aggregated validation errors (grouped by message) */
+  aggregatedErrors = computed(() => this.aggregateErrors(this.pyodideErrors()));
+
+  /** Pyodide state computed signals */
+  pyodideState = computed(() => this.pyodideService.state());
+  pyodideIsReady = computed(() => this.pyodideService.isReady());
+  pyodideIsLoading = computed(() => this.pyodideService.isLoading());
+  pyodideLoadProgress = computed(() => this.pyodideService.loadProgress());
+  pyodideAvailableTemplates = computed(() => this.pyodideService.availableTemplates());
+  pyodideErrorCount = computed(() => this.pyodideErrors().filter(e => e.level === 'error').length);
+  pyodideWarningCount = computed(() => this.pyodideErrors().filter(e => e.level === 'warning').length);
+
   /** Context menu state */
   contextMenu = signal<{ x: number; y: number; row: number; col: number } | null>(null);
+
+  /** Pending chat message to send to AI panel */
+  pendingChatMessage = signal<string | null>(null);
 
   /** Last selected row for shift-click range selection */
   private lastSelectedRow: number | null = null;
@@ -1273,7 +1685,9 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   private resizeObserver?: ResizeObserver;
 
-  constructor(private ngZone: NgZone) {}
+  constructor(private ngZone: NgZone) {
+    this.pyodideService = pyodideValidatorService;
+  }
 
   // ============ Lifecycle ============
 
@@ -1363,23 +1777,202 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   /**
    * Validates the current table.
    */
+  /**
+   * Opens the validation panel and triggers validation
+   */
   async validate(): Promise<ValidationResult | null> {
     const t = this.table();
     if (!t) return null;
 
-    this.loading.set(true);
-    this.loadingMessage.set('Validating...');
+    // Open the validation panel
+    this.showValidationPanel.set(true);
+
+    // Run Pyodide validation automatically
+    await this.runPyodideValidation();
+
+    return null;
+  }
+
+  /**
+   * Initialize Pyodide runtime
+   */
+  async initPyodide(): Promise<void> {
+    try {
+      await this.pyodideService.initialize();
+
+      // Auto-detect templates based on content
+      if (this.table()) {
+        const tsvContent = sdrfExport.exportToTsv(this.table()!);
+        const detected = this.pyodideService.detectTemplates(tsvContent);
+        this.selectedTemplates.set(detected);
+      }
+    } catch (err) {
+      console.error('Failed to initialize Pyodide:', err);
+    }
+  }
+
+  /**
+   * Run Pyodide validation
+   */
+  async runPyodideValidation(): Promise<void> {
+    if (!this.table() || this.pyodideValidating()) return;
+
+    // Initialize Pyodide if not ready
+    if (!this.pyodideIsReady()) {
+      await this.initPyodide();
+    }
+
+    this.pyodideValidating.set(true);
+    this.pyodideErrors.set([]);
 
     try {
-      // Allow UI to update
-      await new Promise(resolve => setTimeout(resolve, 10));
-      const result = await this.validator.validate(t);
-      this.validationResult.set(result);
-      this.validationComplete.emit(result);
-      return result;
+      // Convert table to TSV
+      const currentTable = this.table()!;
+      const tsvContent = sdrfExport.exportToTsv(currentTable);
+
+      // Debug: Log the column state for any sdrf template columns
+      const templateCol = currentTable.columns.find(c => c.name.includes('sdrf template'));
+      if (templateCol) {
+        console.log(`[Validate] Template column state: value="${templateCol.value}", modifiers=${JSON.stringify(templateCol.modifiers)}`);
+        // Log first few lines of TSV to see actual exported values
+        const lines = tsvContent.split('\n').slice(0, 3);
+        console.log(`[Validate] First 3 TSV lines:`, lines);
+      }
+
+      // Run validation
+      const errors = await this.pyodideService.validate(
+        tsvContent,
+        this.selectedTemplates(),
+        { skipOntology: true }
+      );
+
+      this.pyodideErrors.set(errors);
+    } catch (err) {
+      console.error('Pyodide validation failed:', err);
+      this.pyodideErrors.set([{
+        message: `Validation failed: ${err instanceof Error ? err.message : String(err)}`,
+        row: -1,
+        column: null,
+        value: null,
+        level: 'error',
+        suggestion: null
+      }]);
     } finally {
-      this.loading.set(false);
+      this.pyodideValidating.set(false);
+      this.pyodideHasValidated.set(true);
     }
+  }
+
+  /**
+   * Aggregate errors by message for cleaner display
+   */
+  private aggregateErrors(errors: ValidationError[]): AggregatedValidationError[] {
+    const grouped = new Map<string, AggregatedValidationError>();
+
+    for (const err of errors) {
+      // Create a key combining message and column for grouping
+      const key = `${err.message}||${err.column || ''}`;
+
+      if (grouped.has(key)) {
+        const existing = grouped.get(key)!;
+        if (err.row >= 0) {
+          existing.cells.push({ row: err.row, value: err.value });
+        }
+      } else {
+        grouped.set(key, {
+          message: err.message,
+          level: err.level,
+          column: err.column,
+          cells: err.row >= 0 ? [{ row: err.row, value: err.value }] : [],
+          suggestion: err.suggestion
+        });
+      }
+    }
+
+    // Sort by level (errors first) then by number of affected cells
+    return Array.from(grouped.values()).sort((a, b) => {
+      if (a.level !== b.level) return a.level === 'error' ? -1 : 1;
+      return b.cells.length - a.cells.length;
+    });
+  }
+
+  /**
+   * Toggle template selection
+   */
+  toggleTemplate(template: string): void {
+    const current = this.selectedTemplates();
+    if (current.includes(template)) {
+      this.selectedTemplates.set(current.filter(t => t !== template));
+    } else {
+      this.selectedTemplates.set([...current, template]);
+    }
+  }
+
+  /**
+   * Close the validation panel
+   */
+  closeValidationPanel(): void {
+    this.showValidationPanel.set(false);
+  }
+
+  /**
+   * Jump to a specific cell from validation error
+   */
+  jumpToValidationCell(row: number, column: string | null): void {
+    if (row < 0) return;
+
+    // Find column index
+    const t = this.table();
+    if (!t) return;
+
+    let colIndex = -1;
+    if (column) {
+      colIndex = t.columns.findIndex(c => c.name === column);
+    }
+
+    // Scroll to row (row is 0-based from validation, convert to 1-based for display)
+    this.jumpToRowInput = row + 1;
+    this.jumpToRow();
+
+    // Select the cell if column found
+    if (colIndex >= 0) {
+      this.selectedCell.set({ row: row + 1, col: colIndex });
+    }
+  }
+
+  /**
+   * Send validation error to AI chat
+   */
+  sendErrorToAI(error: AggregatedValidationError): void {
+    // Open the AI panel
+    this.showRecommendPanel.set(true);
+
+    // Format the error message for the AI
+    const cellInfo = error.cells.length > 0
+      ? `\nAffected rows: ${error.cells.slice(0, 10).map(c => c.row + 1).join(', ')}${error.cells.length > 10 ? ` and ${error.cells.length - 10} more` : ''}`
+      : '';
+
+    const valueInfo = error.cells.length > 0 && error.cells[0].value
+      ? `\nExample value: "${error.cells[0].value}"`
+      : '';
+
+    const suggestionInfo = error.suggestion
+      ? `\nSuggestion: ${error.suggestion}`
+      : '';
+
+    // Create a formatted message to send to the chat
+    const message = `I have a validation error that I need help with:
+
+**Error:** ${error.message}
+**Column:** ${error.column || 'N/A'}${cellInfo}${valueInfo}${suggestionInfo}
+
+How can I fix this?`;
+
+    // Set the pending chat message - this will be picked up by the recommend panel
+    this.pendingChatMessage.set(message);
+
+    // Clear the message after a delay to allow re-sending the same message
+    setTimeout(() => this.pendingChatMessage.set(null), 500);
   }
 
   /**
@@ -1653,7 +2246,57 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   onApplyRecommendation(event: ApplyRecommendationEvent): void {
     const rec = event.recommendation;
+
+    // Handle add_column type - create new column first
+    if (rec.type === 'add_column') {
+      this.addColumnWithValue(rec.column, rec.suggestedValue, rec.sampleIndices);
+      return;
+    }
+
     this.applyRecommendationToTable(rec);
+  }
+
+  /**
+   * Adds a new column to the table with a default value for specified samples.
+   */
+  private addColumnWithValue(columnName: string, value: string, sampleIndices: number[]): void {
+    const t = this.table();
+    if (!t) return;
+
+    console.log(`[AddColumn] Adding column "${columnName}" with value "${value}" for ${sampleIndices.length} samples`);
+
+    // Determine column type from name
+    const nameLower = columnName.toLowerCase();
+    let columnType: 'source_name' | 'characteristics' | 'comment' | 'factor_value' | 'special' = 'special';
+    if (nameLower.startsWith('characteristics[')) {
+      columnType = 'characteristics';
+    } else if (nameLower.startsWith('comment[')) {
+      columnType = 'comment';
+    } else if (nameLower.startsWith('factor value[')) {
+      columnType = 'factor_value';
+    } else if (nameLower === 'source name') {
+      columnType = 'source_name';
+    }
+
+    // Create the new column
+    const newColumn: SdrfColumn = {
+      name: columnName.toLowerCase().trim(),
+      type: columnType,
+      value: value,
+      modifiers: [],
+      columnPosition: t.columns.length,
+      isRequired: false,
+    };
+
+    // Create new table with the column added
+    const newTable = {
+      ...t,
+      columns: [...t.columns, newColumn],
+    };
+
+    this.table.set(newTable);
+    this.tableChange.emit(newTable);
+    console.log(`[AddColumn] Added column "${columnName}" to table`);
   }
 
   onBatchApplyRecommendations(event: BatchApplyEvent): void {
@@ -1661,6 +2304,25 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
       this.applyRecommendationToTable(rec);
     }
     console.log(`Applied ${event.recommendations.length} recommendations`);
+  }
+
+  onApplyFix(event: ApplyFixEvent): void {
+    // Update the table with the cleaned version
+    this.table.set(event.table);
+    this.tableChange.emit(event.table);
+
+    // Reset scroll and selection state to avoid stale references
+    this.selectedCell.set(null);
+    this.clearSelection();
+
+    // Force scroll container to re-measure
+    if (this.scrollContainer) {
+      // Reset scroll to top to avoid display issues
+      this.scrollContainer.nativeElement.scrollTop = 0;
+      this.scrollTop.set(0);
+    }
+
+    console.log(`Applied fix: ${event.fix.description} (${event.result.changesCount} changes)`);
   }
 
   onPreviewRecommendation(rec: SdrfRecommendation): void {
@@ -1674,11 +2336,217 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   }
 
   private applyRecommendationToTable(rec: SdrfRecommendation): void {
-    // Apply the recommendation value to all affected samples
-    for (const sampleIndex of rec.sampleIndices) {
-      this.setCellValue(sampleIndex, rec.columnIndex, rec.suggestedValue);
+    const t = this.table();
+    if (!t || rec.columnIndex < 0 || rec.columnIndex >= t.columns.length) return;
+
+    const column = t.columns[rec.columnIndex];
+    let sampleIndices = rec.sampleIndices;
+
+    console.log(`[ApplyRec] Starting: column="${rec.column}", currentValue="${rec.currentValue}", suggestedValue="${rec.suggestedValue}", sampleIndices=${JSON.stringify(sampleIndices)}`);
+    console.log(`[ApplyRec] Column state: value="${column.value}", modifiers=${JSON.stringify(column.modifiers)}`);
+
+    // If sampleIndices is empty, determine which samples to update
+    if (sampleIndices.length === 0) {
+      if (rec.currentValue !== undefined && rec.currentValue !== '') {
+        // Find all samples that currently have the currentValue
+        sampleIndices = this.findSamplesWithValue(column, rec.currentValue, t.sampleCount);
+        console.log(`[ApplyRec] Found ${sampleIndices.length} samples with currentValue "${rec.currentValue}"`);
+      } else {
+        // No currentValue specified - apply to ALL samples by changing the default value
+        this.setColumnDefaultValue(rec.columnIndex, rec.suggestedValue);
+        console.log(`[ApplyRec] Applied to all samples: set default value to "${rec.suggestedValue}"`);
+        return;
+      }
     }
-    console.log(`Applied recommendation to ${rec.column}: "${rec.suggestedValue}" for ${rec.sampleIndices.length} samples`);
+
+    if (sampleIndices.length === 0) {
+      console.warn(`[ApplyRec] No samples found to apply recommendation for ${rec.column}. Column value="${column.value}", searching for="${rec.currentValue}"`);
+      return;
+    }
+
+    // Optimization: if ALL samples are affected and no other values exist, just change the default
+    if (sampleIndices.length === t.sampleCount && column.modifiers.length === 0) {
+      this.setColumnDefaultValue(rec.columnIndex, rec.suggestedValue);
+      console.log(`[ApplyRec] Applied to all ${t.sampleCount} samples via default value: "${rec.suggestedValue}"`);
+      return;
+    }
+
+    // Apply the recommendation value to all affected samples in bulk
+    this.setCellValuesBulk(rec.columnIndex, sampleIndices, rec.suggestedValue);
+    console.log(`[ApplyRec] Applied recommendation to ${rec.column}: "${rec.suggestedValue}" for ${sampleIndices.length} samples`);
+  }
+
+  /**
+   * Finds all sample indices that have a specific value in a column.
+   */
+  private findSamplesWithValue(column: SdrfColumn, value: string, totalSamples: number): number[] {
+    const normalizedValue = value.toLowerCase().trim();
+    const normalizedDefault = column.value.toLowerCase().trim();
+    const samples: number[] = [];
+
+    // Check the default value
+    const defaultMatches = normalizedDefault === normalizedValue;
+
+    console.log(`[FindSamples] Searching for: "${normalizedValue}"`);
+    console.log(`[FindSamples] Column default: "${normalizedDefault}", matches=${defaultMatches}`);
+    console.log(`[FindSamples] Modifiers count: ${column.modifiers.length}`);
+
+    // Build a set of samples covered by modifiers
+    const modifierSamples = new Set<number>();
+    for (const modifier of column.modifiers) {
+      const normalizedModifier = modifier.value.toLowerCase().trim();
+      const modifierMatches = normalizedModifier === normalizedValue;
+      const samplesInRange = this.parseSampleRange(modifier.samples);
+
+      console.log(`[FindSamples] Modifier: "${normalizedModifier}", matches=${modifierMatches}, samples=${samplesInRange.length}`);
+
+      for (const s of samplesInRange) {
+        modifierSamples.add(s);
+        if (modifierMatches) {
+          samples.push(s);
+        }
+      }
+    }
+
+    // If default matches, add all samples not covered by modifiers
+    if (defaultMatches) {
+      for (let i = 1; i <= totalSamples; i++) {
+        if (!modifierSamples.has(i)) {
+          samples.push(i);
+        }
+      }
+      console.log(`[FindSamples] Added ${totalSamples - modifierSamples.size} samples from default value`);
+    }
+
+    console.log(`[FindSamples] Total samples found: ${samples.length}`);
+    return samples;
+  }
+
+  /**
+   * Parses a sample range string like "1-3,5,7-10" into an array of sample indices.
+   */
+  private parseSampleRange(rangeString: string): number[] {
+    const samples: number[] = [];
+    const parts = rangeString.split(',');
+
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (trimmed.includes('-')) {
+        const [start, end] = trimmed.split('-').map(Number);
+        if (!isNaN(start) && !isNaN(end)) {
+          for (let i = start; i <= end; i++) {
+            samples.push(i);
+          }
+        }
+      } else {
+        const num = Number(trimmed);
+        if (!isNaN(num)) {
+          samples.push(num);
+        }
+      }
+    }
+
+    return samples;
+  }
+
+  /**
+   * Sets the default value for a column (used when applying to all samples).
+   */
+  private setColumnDefaultValue(colIndex: number, value: string): void {
+    const t = this.table();
+    if (!t || colIndex >= t.columns.length) return;
+
+    const newTable = { ...t, columns: [...t.columns] };
+    const column = { ...newTable.columns[colIndex] };
+
+    // Set new default value and clear all modifiers (since all samples now have this value)
+    column.value = value;
+    column.modifiers = [];
+
+    newTable.columns[colIndex] = column;
+    this.table.set(newTable);
+    this.tableChange.emit(newTable);
+  }
+
+  /**
+   * Sets cell values for multiple samples in bulk (more efficient than calling setCellValue in a loop).
+   */
+  private setCellValuesBulk(colIndex: number, sampleIndices: number[], value: string): void {
+    const t = this.table();
+    if (!t || colIndex >= t.columns.length) return;
+
+    const newTable = { ...t, columns: [...t.columns] };
+    const column = { ...newTable.columns[colIndex], modifiers: [...newTable.columns[colIndex].modifiers] };
+
+    // Group samples: those setting to default vs those needing modifiers
+    const sampleSet = new Set(sampleIndices);
+
+    if (value === column.value) {
+      // Setting to default value - remove these samples from modifiers
+      column.modifiers = column.modifiers.map(m => {
+        const modifierSamples = this.parseSampleRange(m.samples);
+        const remainingSamples = modifierSamples.filter(s => !sampleSet.has(s));
+        if (remainingSamples.length === 0) {
+          return null; // Remove this modifier entirely
+        }
+        return { ...m, samples: this.compactSampleRange(remainingSamples) };
+      }).filter((m): m is { samples: string; value: string } => m !== null);
+    } else {
+      // Setting to a new value
+      // First, remove these samples from any existing modifiers
+      column.modifiers = column.modifiers.map(m => {
+        const modifierSamples = this.parseSampleRange(m.samples);
+        const remainingSamples = modifierSamples.filter(s => !sampleSet.has(s));
+        if (remainingSamples.length === 0) {
+          return null;
+        }
+        return { ...m, samples: this.compactSampleRange(remainingSamples) };
+      }).filter((m): m is { samples: string; value: string } => m !== null);
+
+      // Then add a new modifier for these samples with the new value
+      // Check if there's an existing modifier with this value to merge with
+      const existingModifier = column.modifiers.find(m => m.value === value);
+      if (existingModifier) {
+        const existingSamples = this.parseSampleRange(existingModifier.samples);
+        const mergedSamples = [...new Set([...existingSamples, ...sampleIndices])].sort((a, b) => a - b);
+        existingModifier.samples = this.compactSampleRange(mergedSamples);
+      } else {
+        column.modifiers.push({
+          samples: this.compactSampleRange(sampleIndices.sort((a, b) => a - b)),
+          value
+        });
+      }
+    }
+
+    newTable.columns[colIndex] = column;
+    this.table.set(newTable);
+    this.tableChange.emit(newTable);
+  }
+
+  /**
+   * Compacts an array of sample indices into a range string (e.g., [1,2,3,5,7,8,9] -> "1-3,5,7-9").
+   */
+  private compactSampleRange(samples: number[]): string {
+    if (samples.length === 0) return '';
+    if (samples.length === 1) return String(samples[0]);
+
+    const sorted = [...samples].sort((a, b) => a - b);
+    const ranges: string[] = [];
+    let start = sorted[0];
+    let end = sorted[0];
+
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i] === end + 1) {
+        end = sorted[i];
+      } else {
+        ranges.push(start === end ? String(start) : `${start}-${end}`);
+        start = sorted[i];
+        end = sorted[i];
+      }
+    }
+    ranges.push(start === end ? String(start) : `${start}-${end}`);
+
+    return ranges.join(',');
   }
 
   isRowSelected(rowIndex: number): boolean {
@@ -1888,51 +2756,33 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   /**
    * Gets the CSS class for a column based on its name/type.
-   * SDRF columns are categorized for visual distinction.
+   * SDRF columns are categorized into 4 groups:
+   * - source: Sample Accession (source name)
+   * - characteristic: Sample Properties (characteristics[...])
+   * - comment: Data Properties (comment[...], assay name, technology type, etc.)
+   * - factor: Factor Values (factor value[...])
    */
   getColumnTypeClass(columnName: string): string {
     const name = columnName.toLowerCase().trim();
 
-    // Source/Sample identification columns - Green
+    // Sample Accession - Green (sample identifiers)
     if (name === 'source name' || name === 'sample name') {
       return 'source';
     }
 
-    // Assay/MS run columns - Purple
-    if (name === 'assay name' || name === 'ms run' || name.startsWith('ms ')) {
-      return 'assay';
-    }
-
-    // Characteristics columns - Blue
+    // Sample Properties - Blue (characteristics about the sample)
     if (name.startsWith('characteristics[')) {
       return 'characteristic';
     }
 
-    // Factor value columns - Orange
+    // Factor Values - Orange (experimental variables)
     if (name.startsWith('factor value[') || name.startsWith('factorvalue[')) {
       return 'factor';
     }
 
-    // Comment columns - Gray
-    if (name.startsWith('comment[')) {
-      return 'comment';
-    }
-
-    // Data/file columns - Teal
-    if (name === 'data file' || name === 'file uri' || name === 'uri' ||
-        name.includes('file') || name.includes('uri') || name.includes('path')) {
-      return 'data';
-    }
-
-    // Technical/protocol columns - Blue Gray
-    if (name === 'technology type' || name === 'fraction identifier' ||
-        name === 'label' || name === 'material type' ||
-        name === 'protocol ref' || name.startsWith('protocol')) {
-      return 'technical';
-    }
-
-    // Unrecognized columns - Distinct brown/tan color
-    return 'other';
+    // Data Properties - Gray (everything else: comments, assay, technical, files)
+    // This includes: comment[...], assay name, technology type, data files, etc.
+    return 'comment';
   }
 
   // ============ Sorting Methods ============
@@ -2025,6 +2875,43 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
     this.scrollTop.set(0);
     if (this.scrollContainer) {
       this.scrollContainer.nativeElement.scrollTop = 0;
+    }
+  }
+
+  // ============ Wizard Methods ============
+
+  openWizard(): void {
+    this.showWizard.set(true);
+  }
+
+  closeWizard(): void {
+    this.showWizard.set(false);
+  }
+
+  onWizardComplete(table: SdrfTable): void {
+    this.showWizard.set(false);
+    this.table.set(table);
+    this.tableChange.emit(table);
+
+    // Reset any previous state
+    this.selectedCell.set(null);
+    this.clearSelection();
+    this.filteredIndices.set([]);
+    this.scrollTop.set(0);
+
+    // Trigger validation
+    this.validate();
+  }
+
+  isAiConfigured(): boolean {
+    // Check if LLM settings are configured
+    const settings = localStorage.getItem('llm_settings');
+    if (!settings) return false;
+    try {
+      const parsed = JSON.parse(settings);
+      return !!(parsed.provider && (parsed.apiKey || parsed.provider === 'ollama'));
+    } catch {
+      return false;
     }
   }
 }

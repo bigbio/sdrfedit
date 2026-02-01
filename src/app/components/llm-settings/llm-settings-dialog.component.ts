@@ -158,13 +158,55 @@ interface ProviderOption {
                 @if (ollamaChecking()) {
                   <span class="status-checking">Checking connection...</span>
                 } @else if (ollamaRunning()) {
-                  <span class="status-ok">Connected to Ollama</span>
-                } @else {
-                  <span class="status-error">
-                    Cannot connect to Ollama.
-                    <a href="https://ollama.ai" target="_blank">Install Ollama</a>
-                    and make sure it's running.
+                  <span class="status-ok">
+                    Connected to Ollama
+                    @if (ollamaModels().length > 0) {
+                      ({{ ollamaModels().length }} models available)
+                    }
                   </span>
+                  <button
+                    class="btn btn-sm btn-refresh"
+                    (click)="refreshOllamaModels()"
+                    [disabled]="ollamaChecking()"
+                    title="Refresh model list"
+                  >
+                    Refresh Models
+                  </button>
+                } @else {
+                  <div class="ollama-not-found">
+                    <div class="status-error">
+                      Cannot connect to Ollama at {{ ollamaUrl() }}
+                    </div>
+                    <div class="install-instructions">
+                      <p><strong>To use Ollama:</strong></p>
+                      <ol>
+                        <li>
+                          <strong>Install Ollama:</strong>
+                          <a href="https://ollama.ai/download" target="_blank">Download from ollama.ai</a>
+                          <div class="install-commands">
+                            <code>macOS/Linux: curl -fsSL https://ollama.ai/install.sh | sh</code>
+                          </div>
+                        </li>
+                        <li>
+                          <strong>Pull a model:</strong>
+                          <div class="install-commands">
+                            <code>ollama pull llama3.2</code>
+                          </div>
+                        </li>
+                        <li>
+                          <strong>Start Ollama:</strong> Run the Ollama app or use
+                          <code class="inline-code">ollama serve</code>
+                        </li>
+                      </ol>
+                    </div>
+                    <button
+                      class="btn btn-sm"
+                      (click)="refreshOllamaModels()"
+                      [disabled]="ollamaChecking()"
+                    >
+                      Retry Connection
+                    </button>
+                  </div>
                 }
               </div>
             </div>
@@ -517,6 +559,10 @@ interface ProviderOption {
     }
 
     .ollama-status {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
       padding: 12px;
       border-radius: 6px;
       font-size: 13px;
@@ -529,19 +575,36 @@ interface ProviderOption {
     .status-ok {
       color: #059669;
       background: #d1fae5;
-      padding: 12px;
+      padding: 8px 12px;
       border-radius: 6px;
+      flex: 1;
     }
 
     .status-error {
       color: #dc2626;
       background: #fee2e2;
-      padding: 12px;
+      padding: 8px 12px;
       border-radius: 6px;
+      flex: 1;
     }
 
     .status-error a {
       color: #dc2626;
+    }
+
+    .btn-sm {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    .btn-refresh {
+      background: #ecfdf5;
+      border-color: #059669;
+      color: #059669;
+    }
+
+    .btn-refresh:hover:not(:disabled) {
+      background: #d1fae5;
     }
 
     .form-range {
@@ -629,6 +692,69 @@ interface ProviderOption {
     .btn-secondary:hover:not(:disabled) {
       background: #f3f4f6;
     }
+
+    .ollama-not-found {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .ollama-not-found .status-error {
+      background: none;
+      padding: 0;
+      margin-bottom: 12px;
+      flex: none;
+    }
+
+    .install-instructions {
+      font-size: 13px;
+      color: #374151;
+      margin-bottom: 12px;
+    }
+
+    .install-instructions p {
+      margin: 0 0 8px 0;
+    }
+
+    .install-instructions ol {
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    .install-instructions li {
+      margin-bottom: 10px;
+      line-height: 1.5;
+    }
+
+    .install-instructions a {
+      color: #2563eb;
+    }
+
+    .install-commands {
+      margin-top: 4px;
+    }
+
+    .install-commands code {
+      display: block;
+      background: #1f2937;
+      color: #e5e7eb;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+      overflow-x: auto;
+    }
+
+    .inline-code {
+      display: inline !important;
+      background: #e5e7eb;
+      color: #1f2937;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+    }
   `],
 })
 export class LlmSettingsDialogComponent implements OnInit {
@@ -656,6 +782,7 @@ export class LlmSettingsDialogComponent implements OnInit {
   readonly testResult = signal<{ success: boolean; error?: string } | null>(null);
   readonly ollamaChecking = signal<boolean>(false);
   readonly ollamaRunning = signal<boolean>(false);
+  readonly ollamaModels = signal<string[]>([]);
 
   // Services
   private settingsService: LlmSettingsService;
@@ -668,7 +795,13 @@ export class LlmSettingsDialogComponent implements OnInit {
 
   // Computed
   readonly availableModels = computed(() => {
-    return AVAILABLE_MODELS[this.selectedProvider()] || [];
+    const provider = this.selectedProvider();
+    if (provider === 'ollama') {
+      // Use dynamically fetched Ollama models, fall back to static list
+      const dynamicModels = this.ollamaModels();
+      return dynamicModels.length > 0 ? dynamicModels : AVAILABLE_MODELS.ollama;
+    }
+    return AVAILABLE_MODELS[provider] || [];
   });
 
   readonly requiresApiKey = computed(() => {
@@ -773,6 +906,7 @@ export class LlmSettingsDialogComponent implements OnInit {
 
   canTest(): boolean {
     const provider = this.selectedProvider();
+    // Ollama doesn't need API key
     if (provider === 'ollama') {
       return true;
     }
@@ -781,6 +915,7 @@ export class LlmSettingsDialogComponent implements OnInit {
 
   isConfigValid(): boolean {
     const provider = this.selectedProvider();
+    // Ollama doesn't need API key
     if (provider === 'ollama') {
       return true;
     }
@@ -884,11 +1019,35 @@ export class LlmSettingsDialogComponent implements OnInit {
       const response = await fetch(`${this.ollamaUrl()}/api/tags`, {
         signal: AbortSignal.timeout(5000),
       });
-      this.ollamaRunning.set(response.ok);
+
+      if (response.ok) {
+        this.ollamaRunning.set(true);
+
+        // Parse the response to get available models
+        const data = await response.json();
+        if (data.models && Array.isArray(data.models)) {
+          const modelNames = data.models.map((m: { name: string }) => m.name);
+          this.ollamaModels.set(modelNames);
+
+          // If current model is not in the list, select the first available
+          const currentModel = this.selectedModel();
+          if (modelNames.length > 0 && !modelNames.includes(currentModel)) {
+            this.selectedModel.set(modelNames[0]);
+          }
+        }
+      } else {
+        this.ollamaRunning.set(false);
+        this.ollamaModels.set([]);
+      }
     } catch {
       this.ollamaRunning.set(false);
+      this.ollamaModels.set([]);
     } finally {
       this.ollamaChecking.set(false);
     }
+  }
+
+  refreshOllamaModels(): void {
+    this.checkOllamaStatus();
   }
 }

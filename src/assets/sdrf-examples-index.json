@@ -1,0 +1,1048 @@
+{
+  "columns": {
+    "characteristics[organism]": {
+      "all": {
+        "homo sapiens": 520507,
+        "human + mouse": 7731,
+        "plasmodium falciparum": 3719,
+        "arabidopsis thaliana": 3160,
+        "mus musculus": 2891,
+        "escherichia coli": 1815,
+        "saccharomyces cerevisiae": 881,
+        "escherichia coli k-12": 338,
+        "rattus norvegicus": 324,
+        "citrus maxima": 240,
+        "haloferax volcanii ds2": 190,
+        "plasmodium knowlesi": 156,
+        "equus caballus": 124,
+        "sus scrofa domesticus": 120,
+        "oryza sativa": 118,
+        "human gut metagenome": 108,
+        "bacteroides thetaiotaomicron": 91,
+        "anaerostipes caccae": 90,
+        "bifidobacterium longum": 90,
+        "blautia producta": 90,
+        "clostridium butyricum": 90,
+        "clostridium": 90,
+        "lactobacillus": 90,
+        "chlorocebus sabaeus": 84,
+        "danio rerio": 65,
+        "mycolicibacterium smegmatis": 64,
+        "marine metagenome": 48,
+        "hela cells": 41,
+        "arabidopsis": 24,
+        "cercopithecus": 22
+      }
+    },
+    "characteristics[organism part]": {
+      "homo sapiens": {
+        "blood plasma": 67709,
+        "cervix": 35997,
+        "blood serum": 35929,
+        "lung": 32815,
+        "breast": 27010,
+        "blood": 24639,
+        "bronchus and lung": 23676,
+        "liver": 22837,
+        "brain": 21506,
+        "not reported": 21284,
+        "ovary": 18712,
+        "pancreas": 12036,
+        "colon": 11518,
+        "stomach": 11463,
+        "kidney": 10010,
+        "head and neck": 9719,
+        "stem cell": 6280,
+        "skin": 5716,
+        "muscle": 5288,
+        "colorectal": 5251,
+        "uterus": 5198,
+        "heart": 5136,
+        "bone marrow": 3085,
+        "ovarian tumor": 2435,
+        "endometrium": 2268,
+        "body of uterus": 2208,
+        "cd4+ t cells": 2160,
+        "rectum": 2008,
+        "esophagus": 1921,
+        "tonsil": 1798
+      },
+      "mus musculus": {
+        "heart": 1669,
+        "skin": 158,
+        "embryo": 154,
+        "brain": 88,
+        "kidney": 84,
+        "liver": 78,
+        "lung": 64,
+        "spleen": 47,
+        "brown adipose tissue": 39,
+        "testis": 36,
+        "triceps muscle": 36,
+        "pancreas": 35,
+        "lungs": 32,
+        "immune system": 30,
+        "not applicatble": 27,
+        "colon": 24,
+        "retina": 12,
+        "blood plasma": 12,
+        "blood plasma extracellular vesicles(pevs)": 7
+      },
+      "plasmodium falciparum": {
+        "human erythrocytes": 844
+      },
+      "escherichia coli": {
+        "cell lysate": 1505,
+        "whole plant": 120,
+        "ac=pato:0001728;nt=multi-cellular organismal disposition": 72,
+        "inclusion body": 16,
+        "extracellular vesicles": 9,
+        "culture supernatant tris fraction": 3,
+        "culture supernatant tris/triton x-100 fraction": 3,
+        "culture supernatant sds fraction": 3
+      },
+      "citrus maxima": {
+        "floral bud": 240
+      },
+      "saccharomyces cerevisiae": {
+        "whole plant": 432,
+        "empty": 48,
+        "cell lysate": 4
+      },
+      "oryza sativa": {
+        "leaf": 33,
+        "embryo": 18,
+        "flower": 10,
+        "root": 9,
+        "anther": 8,
+        "panicles": 6,
+        "pollen": 4,
+        "shoot": 3,
+        "callus": 3
+      },
+      "rattus norvegicus": {
+        "heart": 144,
+        "soluble fraction of pancreas": 72,
+        "membrane fraction of pancreas": 72,
+        "hippocampal neuron": 28
+      },
+      "haloferax volcanii ds2": {
+        "whole organism": 112,
+        "culture supernatant": 29,
+        "membrane": 23,
+        "cytosol": 22,
+        "culture supernatant cscl fraction": 4
+      },
+      "arabidopsis thaliana": {
+        "seed": 1072,
+        "leaf": 356,
+        "flower": 356,
+        "root": 328,
+        "stem": 112,
+        "callus": 84,
+        "fruit": 56,
+        "pollen": 56,
+        "whole organism": 40,
+        "sepal": 28,
+        "petal": 28,
+        "stamen": 28,
+        "carpel": 28,
+        "silique": 28,
+        "embryo": 28,
+        "seed imbibed": 28,
+        "node": 28,
+        "internode": 28,
+        "cauline leaf": 28,
+        "leaf distal": 28,
+        "leaf proximal": 28,
+        "leaf petiole": 28,
+        "senescent leaf": 28,
+        "flower pedicle": 28,
+        "silique septum": 28,
+        "silique valves": 28,
+        "egg-cell like callus": 28,
+        "cell culture early": 28,
+        "cell culture late": 28,
+        "cotyledons": 28
+      },
+      "mycolicibacterium smegmatis": {
+        "plasma membrane": 16,
+        "mycomembrane-containing cell-wall": 16,
+        "cytosol and periplasm": 16,
+        "culture filtrate": 16
+      },
+      "cercopithecus": {
+        "kidney": 22
+      },
+      "chlorocebus sabaeus": {
+        "kidney": 84
+      },
+      "escherichia coli k-12": {
+        "whole plant": 248
+      },
+      "equus caballus": {
+        "heart": 124
+      },
+      "sus scrofa domesticus": {
+        "heart": 120
+      },
+      "danio rerio": {
+        "heart": 58
+      },
+      "arabidopsis": {
+        "sprout": 8
+      },
+      "unknown": {
+        "kidney": 1860,
+        "heart": 1350,
+        "lung": 1200,
+        "liver": 1066,
+        "spleen": 1035,
+        "thyroid": 960,
+        "testis": 450,
+        "kidney/liver": 209,
+        "lung-l-006": 30
+      },
+      "human + mouse": {
+        "not reported": 394,
+        "breast": 190
+      }
+    },
+    "characteristics[disease]": {
+      "homo sapiens": {
+        "normal": 124084,
+        "human papillomavirus-related cervical adenocarcinoma": 34302,
+        "lung adenocarcinoma": 19324,
+        "not reported": 18708,
+        "breast invasive carcinoma": 11275,
+        "acute lymphoblastic leukemia (all)": 11140,
+        "hepatocellular carcinoma": 10018,
+        "ovarian serous cystadenocarcinoma": 9222,
+        "breast cancer": 9064,
+        "squamous cell lung cancer": 8584,
+        "colorectal cancer": 8215,
+        "pancreatic ductal adenocarcinoma": 8004,
+        "st-elevation myocardial infarction": 5720,
+        "colon adenocarcinoma": 5339,
+        "lung squamous cell carcinoma": 4855,
+        "high-grade serous ovarian adenocarcinoma": 4462,
+        "obesity disorder": 3908,
+        "metastatic cutaneous melanoma": 3600,
+        "alzheimer's disease": 3451,
+        "lung cancer": 3401,
+        "non-small cell lung carcinoma": 3329,
+        "primary tumor": 3312,
+        "clear cell renal cell carcinoma": 3287,
+        "chronic lymphocytic leukemia (cll)": 3200,
+        "early onset gastric cancer": 3120,
+        "acute myocardial infarction": 3040,
+        "glioblastoma": 2911,
+        "head and neck squamous cell carcinoma": 2819,
+        "epidermoid carcinoma": 2760,
+        "pediatric/aya brain tumors": 2760
+      },
+      "mus musculus": {
+        "normal": 1897,
+        "low metastatic potential": 86,
+        "high metastatic potential": 60,
+        "mercury poisoning": 30,
+        "lymph node metastatic melanoma": 12,
+        "experimental cerebral malaria": 4,
+        "schistosomiasis": 3
+      },
+      "oryza sativa": {
+        "xanthomonas oryzae pv. oryzae": 6
+      },
+      "feces metagenome": {
+        "normal": 15
+      },
+      "rattus norvegicus": {
+        "control": 72,
+        "acute pancreatitis": 72,
+        "normal": 24
+      },
+      "arabidopsis thaliana": {
+        "normal": 3120
+      },
+      "chlorocebus sabaeus": {
+        "normal": 84
+      },
+      "human gut metagenome": {
+        "normal": 48,
+        "type 1 diabetes": 36,
+        "type 1 diabetes mellitus": 24
+      },
+      "unknown": {
+        "sars-cov-2": 5005,
+        "control": 2615,
+        "normal": 6
+      },
+      "human + mouse": {
+        "breast cancer": 2125,
+        "breast cancers": 1500,
+        "glioblastoma": 792,
+        "triple-negative breast cancer": 750,
+        "not reported": 559,
+        "breast invasive carcinoma": 555,
+        "tumor": 490,
+        "ovarian cancer tumor": 480,
+        "colon cancer": 300,
+        "normal": 180
+      }
+    },
+    "characteristics[developmental stage]": {
+      "homo sapiens": {
+        "adult": 109207,
+        "childhood": 11140,
+        "old": 8818,
+        "young": 4948,
+        "fetus": 3096,
+        "elderly": 2835,
+        "children": 661,
+        "infant": 483,
+        "juvenile": 368,
+        "child": 219,
+        "stage 4": 120,
+        "neonatal": 98,
+        "fetal": 90,
+        "adolescent": 80,
+        "late embryonic stage": 48,
+        "embryo stage": 24,
+        "neonate": 12,
+        "juvenile stage": 10
+      },
+      "citrus maxima": {
+        "stage 1": 80,
+        "stage 2": 70,
+        "stage 3": 60
+      },
+      "mus musculus": {
+        "9w-12w": 1477,
+        "adult": 128
+      },
+      "oryza sativa": {
+        "mature": 3,
+        "young": 3
+      },
+      "rattus norvegicus": {
+        "embryonic day 18": 28,
+        "8w": 24
+      },
+      "feces metagenome": {
+        "adult": 15
+      },
+      "cercopithecus": {
+        "adult": 22
+      },
+      "human gut metagenome": {
+        "adult": 69
+      }
+    },
+    "characteristics[sex]": {
+      "homo sapiens": {
+        "female": 163835,
+        "male": 111946
+      },
+      "mus musculus": {
+        "male": 367,
+        "female": 8
+      },
+      "citrus maxima": {
+        "male": 240
+      },
+      "feces metagenome": {
+        "female": 8,
+        "male": 7
+      },
+      "cercopithecus": {
+        "female": 22
+      },
+      "human gut metagenome": {
+        "female": 66,
+        "male": 42
+      },
+      "unknown": {
+        "male": 4376,
+        "female": 3244
+      }
+    },
+    "characteristics[age]": {
+      "homo sapiens": {
+        "44": 1919,
+        "49": 1958,
+        "50": 1974,
+        "52": 1797,
+        "54": 2551,
+        "56": 2928,
+        "57": 2233,
+        "58": 3471,
+        "59": 2929,
+        "60": 2533,
+        "61": 3153,
+        "62": 3090,
+        "63": 3539,
+        "64": 6000,
+        "65": 3038,
+        "66": 4751,
+        "67": 2199,
+        "68": 4191,
+        "69": 3017,
+        "70": 2099,
+        "71": 2465,
+        "72": 2227,
+        "74": 2035,
+        "30y6m": 34366,
+        "23y-99y": 6294,
+        "31y": 3731,
+        "53y": 3616,
+        "85y": 2903,
+        "69y": 2163,
+        "51y": 2120
+      },
+      "mus musculus": {
+        "3w": 347,
+        "8w-12w": 48,
+        "3m": 48,
+        "10m": 32,
+        "24m": 32,
+        "5m": 32,
+        "18m": 16,
+        "6m": 12,
+        "30w": 12
+      },
+      "feces metagenome": {
+        "39y": 2,
+        "48y": 2,
+        "45y": 2,
+        "44y": 2,
+        "24y": 2
+      },
+      "arabidopsis thaliana": {
+        "5w": 664,
+        "3w": 544,
+        "1w": 392,
+        "6w": 168,
+        "4w": 168,
+        "7w": 96,
+        "2w": 16
+      },
+      "human gut metagenome": {
+        "5": 6,
+        "9": 3,
+        "12": 6,
+        "14": 3,
+        "16": 3,
+        "17": 3,
+        "19": 3,
+        "24": 6,
+        "28": 6,
+        "30": 9,
+        "34": 3,
+        "37": 6,
+        "43": 6,
+        "57": 9,
+        "58": 18,
+        "60": 9,
+        "62": 9
+      },
+      "unknown": {
+        "62y": 740,
+        "70y": 632,
+        "61y": 609,
+        "66y": 569,
+        "55y": 537,
+        "78y": 480,
+        "91y": 430,
+        "83y": 420,
+        "73y": 398,
+        "52y": 389,
+        "63y": 240,
+        "69y": 152,
+        "57y": 150,
+        "64y": 150,
+        "49y": 120,
+        "3y": 92,
+        "42y": 90,
+        "10y": 90,
+        "18y": 80,
+        "5y": 80,
+        "12y": 62,
+        "7y": 60,
+        "56y": 60,
+        "44y": 60,
+        "60y": 60,
+        "35y": 60,
+        "72y": 60,
+        "47y": 60,
+        "75y": 60,
+        "74y": 60
+      }
+    },
+    "characteristics[cell line]": {
+      "homo sapiens": {
+        "hela": 36519,
+        "nci-60": 9000,
+        "a431": 2764,
+        "k-562": 2222,
+        "panc-1": 1560,
+        "hepg2": 1490,
+        "mda-mb-231": 1463,
+        "hek293t": 1270,
+        "mcf-7": 1098,
+        "k562": 1005,
+        "hek293": 966,
+        "gm12878": 898,
+        "huvec": 884,
+        "a375": 843,
+        "helas3": 824,
+        "hct116": 804,
+        "a549": 769,
+        "wm266-4, wm115, a375, mel526, mel624": 764,
+        "hes1": 733,
+        "bubh_3": 628,
+        "hela-s3": 604,
+        "mixed": 552,
+        "mcf7": 520,
+        "sh-sy5y": 500,
+        "h1299": 481,
+        "tumour associated b cells": 470,
+        "caco-2": 432,
+        "widr": 383,
+        "hcclm6": 270,
+        "sw620": 238
+      },
+      "mus musculus": {
+        "nih-3t3 cell": 154,
+        "b16-f1": 82,
+        "b16-f10": 64,
+        "c2c12": 51,
+        "e14tg2a": 48,
+        "clo:0009575": 30,
+        "b16-f1r2": 12
+      },
+      "saccharomyces cerevisiae": {
+        "yph499": 6
+      },
+      "plasmodium falciparum": {
+        "fikk cko": 624
+      },
+      "cercopithecus": {
+        "vero c1008": 22
+      },
+      "chlorocebus sabaeus": {
+        "vero e6": 84
+      },
+      "unknown": {
+        "hepg2": 6
+      }
+    },
+    "characteristics[cell type]": {
+      "homo sapiens": {
+        "epithelial": 43834,
+        "epithelial cell": 10789,
+        "disease cell type": 5520,
+        "cell line": 4580,
+        "b cell": 4501,
+        "malignant cell": 3600,
+        "primary tumor": 3325,
+        "lymphoblast": 3217,
+        "cd4": 2558,
+        "lymphocyte": 2169,
+        "platelet": 2017,
+        "erythrocyte": 1158,
+        "epithelial-like": 1154,
+        "b-lymphocyte": 898,
+        "endothelial cell": 831,
+        "cardiac": 806,
+        "melanoma cell": 764,
+        "monocyte": 600,
+        "burkitt lymphoma (bl) cells": 484,
+        "solid tissue normal": 450,
+        "cd8": 329,
+        "tissue": 329,
+        "breast epithelium": 304,
+        "kidney cell": 294,
+        "cancerous cell": 276,
+        "gastric cancer cells": 216,
+        "mammary gland epithelial cell": 200,
+        "haploid cell": 200,
+        "epithelium": 192,
+        "heart cell": 192
+      },
+      "mus musculus": {
+        "cardiac": 1477,
+        "fibroblast": 154,
+        "myoblast": 51,
+        "embryonic stem cell": 48,
+        "spleen": 41,
+        "brain": 40,
+        "heart": 40,
+        "kidney": 40,
+        "lung": 40,
+        "brown adipose tissue": 39,
+        "liver": 36,
+        "testis": 36,
+        "pancreas": 35,
+        "b cell": 30,
+        "conventional t cell": 14,
+        "regulatory t cell": 13
+      },
+      "plasmodium falciparum": {
+        "schizonts": 2086,
+        "schizont": 844,
+        "merozoites": 71,
+        "segmenter": 20,
+        "gametocytes;schizonts": 8
+      },
+      "escherichia coli": {
+        "prokaryotic cell": 1587,
+        "cell culture": 72
+      },
+      "saccharomyces cerevisiae": {
+        "cell culture": 4
+      },
+      "rattus norvegicus": {
+        "neuron": 28,
+        "cardiac": 24
+      },
+      "haloferax volcanii ds2": {
+        "prokaryotic cell": 190
+      },
+      "arabidopsis thaliana": {
+        "plant cell": 3120
+      },
+      "plasmodium knowlesi": {
+        "schizonts": 156
+      },
+      "unknown": {
+        "schizonts": 48
+      },
+      "cercopithecus": {
+        "epithelial cell": 22
+      },
+      "chlorocebus sabaeus": {
+        "epithelial": 84
+      }
+    },
+    "characteristics[ancestry category]": {
+      "homo sapiens": {
+        "african american": 35967,
+        "han chinese": 31848,
+        "caucasian": 17139,
+        "white": 9963,
+        "\"white, caucasian\"": 9192,
+        "black": 3627,
+        "white - white british": 3102,
+        "not hispanic or latino": 3100,
+        "japanese": 2569,
+        "xhosa": 2425,
+        "non-hispanic white": 2256,
+        "peruvian": 2083,
+        "african american/black": 1752,
+        "asian": 1239,
+        "no available": 1232,
+        "european": 1125,
+        "black or african american": 1080,
+        "chinese": 622,
+        "qc pool": 288,
+        "korean": 265,
+        "hispanic/latino": 192,
+        "white british": 192,
+        "white - other": 192,
+        "hispanic or latino": 175,
+        "african": 170,
+        "american indian or alaska native": 96,
+        "cauc": 96,
+        "white caucasian": 48,
+        "indian": 45,
+        "arab": 40
+      },
+      "mus musculus": {
+        "not aplicable": 347
+      }
+    },
+    "characteristics[strain]": {
+      "mus musculus": {
+        "c57bl/6j": 391,
+        "swiss webster": 347,
+        "a/j": 253,
+        "balb/cj": 247,
+        "dba/2j": 247,
+        "fvb/nj": 245,
+        "ce/j": 240
+      },
+      "escherichia coli": {
+        "dh5 alpha": 120,
+        "bw25113": 30
+      },
+      "haloferax volcanii ds2": {
+        "lm08": 112,
+        "h53": 29,
+        "aglb::trp": 19,
+        "agl15::trp": 18,
+        "fh54": 4,
+        "af103": 4
+      },
+      "escherichia coli k-12": {
+        "k12": 248
+      },
+      "saccharomyces cerevisiae": {
+        "s288c": 432,
+        "empty": 48
+      }
+    },
+    "characteristics[strain/breed]": {
+      "mus musculus": {
+        "c3h": 36
+      },
+      "escherichia coli": {
+        "escherichia coli str. k-12 substr. mg1655": 294,
+        "escherichia coli str. k-12": 249,
+        "escherichia coli str. k-12 substr. w3110": 188,
+        "escherichia coli bw25993": 186,
+        "escherichia coli bl21(de3)": 147,
+        "escherichia coli str. w0153": 85,
+        "escherichia coli bw25113": 72,
+        "e. coli ba102": 60,
+        "aska(-) library host cell k-12 ag1(me5305)": 58,
+        "escherichia coli o25b:h4-st131": 24,
+        "escherichia coli dh5": 20,
+        "escherichia coli atcc 25922": 20,
+        "escherichia coli str. dsm 105380": 18,
+        "escherichia coli nc101": 16,
+        "escherichia coli st93": 12,
+        "escherichia coli st73": 12,
+        "escherichia coli st1421": 12,
+        "escherichia coli str. o2:k1; st95": 9,
+        "escherichia coli o127:h6 strain e2348/69": 8,
+        "escherichia coli str. k-12 substr. ncm3722": 6,
+        "escherichia coli bw35113": 6,
+        "apec strain ae17(o2 serotype)": 6,
+        "escherichia coli str. o6:k2; st73": 3,
+        "escherichia coli str. o2:k1; st117": 3,
+        "escherichia coli str. k-12 substr. mc4100": 2,
+        "escherichia coli str. jw2806": 2
+      },
+      "rattus norvegicus": {
+        "_wt/ttntva-band": 8,
+        "_wt/wt": 8,
+        "_wt/ttntvz-disk": 8
+      }
+    },
+    "comment[instrument]": {
+      "homo sapiens": {
+        "nt=orbitrap fusion lumos;ac=ms:1002732": 73866,
+        "nt=q exactive hf;ac=ms:1002523": 65654,
+        "nt=q exactive;ac=ms:1001911": 62735,
+        "nt=q exactive hf-x;ac=ms:1002877": 46972,
+        "ac=ms:1000932;nt=tripletof 5600": 32977,
+        "nt=ltq orbitrap velos;ac=ms:1001742": 27698,
+        "nt=orbitrap fusion;ac=ms:1002416": 22931,
+        "nt=tripletof 6600;ac=ms:1002533": 14107,
+        "ac=ms:1001911;nt=q exactive": 12214,
+        "nt=q exactive plus;ac=ms:1002634": 12170,
+        "nt=orbitrap elite;ac=ms:1001910": 11705,
+        "ac=ms:1002732;nt=orbitrap fusion lumos": 9866,
+        "nt=q exactive plus;ac=ms:1001911": 8872,
+        "ac=ms:1001742;nt=ltq orbitrap velos": 8726,
+        "ac=ms:1002416;nt=orbitrap fusion": 7907,
+        "ac=ms:1002523;nt=q exactive hf": 6436,
+        "nt=bruker timstof pro 2;ac=ms:1003123": 6294,
+        "nt=orbitrap fusion lumos": 6000,
+        "ac=ms:1002523; nt=q exactive hf": 5443,
+        "nt=ltq orbitrap elite,ac=ms:1001910": 5152,
+        "ac=ms:1001910;nt=orbitrap elite": 4850,
+        "ac=ms:1002634;nt=q exactive plus": 4699,
+        "orbitrap": 4311,
+        "nt=ltq orbitrap;ac=ms:1000449": 4302,
+        "q exactive": 3600,
+        "nt=bruker timstof pro;ac=ms:1003005": 2575,
+        "nt=orbitrap fusion lumos;ac=ms:1002731": 2348,
+        "nt=tripletof 5600;ac=ms:1000932": 2170,
+        "ac=ms:1001911; nt=q exactive": 2160,
+        "ac=ms:1000639;nt=ltq orbitrap xl etd": 1995
+      },
+      "mus musculus": {
+        "ac=ms:1001910;nt=orbitrap elite": 1477,
+        "nt=q exactive;ac=ms:1001911": 362,
+        "ac=ms:1000449;nt=ltq orbitrap": 347,
+        "ac=ms:1001911;nt=q exactive": 192,
+        "ac=ms:1002417;nt=orbitrap fusion etd": 128,
+        "nt=3200 qtrap;ac=ms:1000651": 116,
+        "nt=ltq orbitrap;ac=ms:1000449": 49,
+        "ac=ms:1000484;nt=orbitrap": 48,
+        "nt=q exactive plus;ac=ms:1002634": 36,
+        "nt=ltq;ac=ms:1000447": 30,
+        "nt=ltq orbitrap velos;ac=ms:1001742": 24,
+        "q exactive hf-x": 16,
+        "ac=ms:1002523;nt=q exactive hf": 15,
+        "ac=ms:1002634;nt=q exactive plus": 12,
+        "ac=ms:1000639;nt=orbitrap fusion": 12,
+        "nt=ltq velos;ac=ms:1000855": 10,
+        "nt=tripletof 5600;ac=ms:1000932": 10,
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "escherichia coli": {
+        "nt=q exactive": 236,
+        "nt=q exactive plus": 217,
+        "nt=q exactive hf-x": 200,
+        "tripletof 5600+": 176,
+        "nt=q exactive hf": 172,
+        "orbitrap eclipse": 152,
+        "q exactive": 146,
+        "nt=ltq orbitrap fusion;ac=ms:1002416": 120,
+        "nt=orbitrap elite": 84,
+        "q exactive plus": 74,
+        "nt=orbitrap elite;ac=ms:1001910": 72,
+        "sciex instrument model": 33,
+        "ac=ms:1001742;nt=ltq orbitrap velos": 32,
+        "ac=ms:1000639;nt=ltq orbitrap xl etd": 30,
+        "q exactive hf-x": 24,
+        "timstof pro 2": 24,
+        "nt=orbitrap velos pro": 10,
+        "nt=orbitrap fusion": 6,
+        "orbitrap elite": 4,
+        "nt=orbitrap fusion lumos": 3
+      },
+      "plasmodium falciparum": {
+        "ac=ms:1002732;nt=orbitrap fusion lumos": 1802,
+        "ac=ms:1003096;nt=ltq orbitrap velos pro": 1528,
+        "ac=ms:1001742;nt=ltq orbitrap velos": 282,
+        "ac=ms:1000557;nt=ltq ft ultra": 71,
+        "ac=ms:1001911;nt=q exactive": 36
+      },
+      "citrus maxima": {
+        "nt=q exactive;ac=ms:1001911": 240
+      },
+      "saccharomyces cerevisiae": {
+        "nt=orbitrap fusion;ac=ms:1002416": 523,
+        "ac=ms:1002877;nt=q exactive hf-x": 223,
+        "ac=ms:1001911;nt=q exactive": 52,
+        "ac=ms:1001742;nt=ltq orbitrap velos": 49,
+        "nt=q exactive plus;ac=ms:1001911": 9,
+        "nt=q exactive hf-x;ac=ms:1002877": 8,
+        "ac=ms:1002634;nt=q exactive plus": 6,
+        "nt=q exactive plus;ac=ms:1002634": 6,
+        "nt=ltq orbitrap;ac=ms:1000449": 4
+      },
+      "oryza sativa": {
+        "ac=ms:1001911;nt=q exactive": 52,
+        "ac=ms:1000449;nt=ltq orbitrap": 25,
+        "nt=ltq orbitrap xl;ac=ms:1000556": 23,
+        "ac=ms:1000932;nt=tripletof 5600": 10,
+        "ac=ms:1001910;nt=orbitrap elite": 8
+      },
+      "rattus norvegicus": {
+        "nt=ltq orbitrap velos ;ac=ms:1001742": 144,
+        "nt=q exactive;ac=ms:1001911": 120,
+        "nt=q exactive plus;ac=ms:1002634": 28,
+        "nt=orbitrap fusion;ac=ms:1002416": 24,
+        "nt=q exactive hf-x;ac=ms:1002877": 8
+      },
+      "feces metagenome": {
+        "ac=ms:1000449;nt=ltq orbitrap": 15
+      },
+      "haloferax volcanii ds2": {
+        "ac=ms:1002634;nt=q exactive plus": 128,
+        "ac=ms:1002523;nt=q exactive hf": 62
+      },
+      "arabidopsis thaliana": {
+        "nt=q exactive hf;ac=ms:1002523": 3120,
+        "nt=q exactive;ac=ms:1001911": 40
+      },
+      "plasmodium knowlesi": {
+        "ac=ms:1002732;nt=orbitrap fusion lumos": 120,
+        "ac=ms:1001911;nt=q exactive": 36
+      },
+      "unknown": {
+        "ac=ms:1002523;nt=q exactive hf": 8640,
+        "ac=ms:1002732;nt=orbitrap fusion lumos": 48,
+        "nt=q exactive;ac=ms:1001911": 6
+      },
+      "anaerostipes caccae": {
+        "nt=q exactive hf;ac=ms:1002523": 90
+      },
+      "bacteroides thetaiotaomicron": {
+        "nt=q exactive hf;ac=ms:1002523": 90
+      },
+      "bifidobacterium longum": {
+        "nt=q exactive hf;ac=ms:1002523": 90
+      },
+      "blautia producta": {
+        "nt=q exactive hf;ac=ms:1002523": 90
+      },
+      "clostridium butyricum": {
+        "nt=q exactive hf;ac=ms:1002523": 90
+      },
+      "clostridium": {
+        "nt=q exactive hf;ac=ms:1002523": 90
+      },
+      "escherichia coli k-12": {
+        "nt=ltq orbitrap;ac=ms:1000449": 144,
+        "nt=orbitrap fusion;ac=ms:1002416": 96,
+        "nt=q exactive hf;ac=ms:1002523": 90,
+        "nt=q exactive;ac=ms:1001911": 8
+      },
+      "lactobacillus": {
+        "nt=q exactive hf;ac=ms:1002523": 90
+      },
+      "mycolicibacterium smegmatis": {
+        "nt=orbitrap fusion": 64
+      },
+      "cercopithecus": {
+        "nt=orbitrap fusion lumos;ac=ms:1002732": 22
+      },
+      "chlorocebus sabaeus": {
+        "nt=orbitrap exploris 480;ac=ms:1003028": 64,
+        "nt=q exactive hf;ac=ms:1002523": 20
+      },
+      "kluyveromyces marxianus": {
+        "nt=orbitrap fusion;ac=ms:1002416": 18
+      },
+      "yarrowia lipolytica": {
+        "nt=orbitrap fusion;ac=ms:1002416": 17
+      },
+      "rift valley fever": {
+        "nt=q exactive hf-x;ac=ms:1002877": 2
+      },
+      "vaccinia virus": {
+        "nt=q exactive hf-x;ac=ms:1002877": 2
+      },
+      "zika virus": {
+        "nt=q exactive hf-x;ac=ms:1002877": 2
+      },
+      "athaliana": {
+        "nt=q exactive hf-x;ac=ms:1002877": 20
+      },
+      "hela cells": {
+        "nt=q exactive hf-x;ac=ms:1002877": 41
+      },
+      "equus caballus": {
+        "nt=q exactive;ac=ms:1001911": 124
+      },
+      "sus scrofa domesticus": {
+        "nt=q exactive;ac=ms:1001911": 120
+      },
+      "danio rerio": {
+        "nt=q exactive;ac=ms:1001911": 58,
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "human gut metagenome": {
+        "ac=ms:1001911;nt=q exactive": 108
+      },
+      "marine metagenome": {
+        "ac=ms:1001911;nt=q exactive": 48
+      },
+      "synechocystis nigrescens": {
+        "nt=q exactive hf-x;ac=ms:1002877": 3
+      },
+      "thalassiosira pseudonana": {
+        "nt=q exactive hf-x;ac=ms:1002877": 9
+      },
+      "chlamydomonas reinhardtii": {
+        "nt=q exactive hf-x;ac=ms:1002877": 8
+      },
+      "dictyostelium discoideum": {
+        "nt=q exactive hf-x;ac=ms:1002877": 9
+      },
+      "fusarium oxysporum": {
+        "nt=q exactive hf-x;ac=ms:1002877": 11
+      },
+      "arabidopsis": {
+        "nt=q exactive hf-x;ac=ms:1002877": 24
+      },
+      "drosophila melanogaster": {
+        "nt=q exactive hf-x;ac=ms:1002877": 8
+      },
+      "bos taurus": {
+        "nt=q exactive hf-x;ac=ms:1002877": 8
+      },
+      "didelphidae": {
+        "nt=q exactive hf-x;ac=ms:1002877": 8
+      },
+      "gallus gallus": {
+        "nt=q exactive hf-x;ac=ms:1002877": 8
+      },
+      "oryctolagus cuniculus": {
+        "nt=q exactive hf-x;ac=ms:1002877": 8
+      },
+      "canis lupus": {
+        "nt=q exactive hf-x;ac=ms:1002877": 15
+      },
+      "cricetulus griseus": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "oryzias melastigma": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "sus scrofa": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "triticum aestivum": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "glycine max": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "vitis vinifera": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "tardigrada": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "caenorhabditis elegans": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "porphyra umbilicalis": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "chromera velia": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "neurospora crassa": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "stentor coeruleus": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "symbiodinium microadriaticum": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "gossypium hirsutum": {
+        "nt=q exactive hf-x;ac=ms:1002877": 8
+      },
+      "emiliania huxleyi": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "guillardia theta": {
+        "nt=q exactive hf-x;ac=ms:1002877": 8
+      },
+      "phaeodactylum tricornutum": {
+        "nt=q exactive hf-x;ac=ms:1002877": 7
+      },
+      "human + mouse": {
+        "nt=orbitrap fusion lumos;ac=ms:1002732": 4022,
+        "nt=q exactive;ac=ms:1001911": 2300,
+        "nt=ltq orbitrap velos;ac=ms:1001742": 960,
+        "nt=q exactive hf;ac=ms:1002523": 240,
+        "nt=q exactive hf-x;ac=ms:1002877": 209
+      }
+    }
+  },
+  "metadata": {
+    "generatedAt": "2026-02-01T15:14:55.091Z",
+    "filesProcessed": 1026,
+    "totalRows": 552717,
+    "rejectedValues": 19942,
+    "columnsIndexed": 12,
+    "maxValuesPerColumn": 30,
+    "minCountThreshold": 2,
+    "validationRules": [
+      "Sex values restricted to: male, female, mixed sex, hermaphrodite",
+      "Developmental stage: disease terms rejected",
+      "Disease: developmental terms rejected",
+      "Age: format validation (25Y, 6M, ranges)",
+      "Cross-column misplaced metadata rejected"
+    ]
+  }
+}

@@ -64,7 +64,7 @@ export const DEFAULT_PROVIDER_CONFIGS: Record<LlmProviderType, Partial<LlmProvid
     temperature: 0.3,
   },
   ollama: {
-    model: 'llama3.2',
+    model: 'qwen3',
     baseUrl: 'http://localhost:11434',
     timeoutMs: 120000,
     maxTokens: 4096,
@@ -79,7 +79,7 @@ export const AVAILABLE_MODELS: Record<LlmProviderType, string[]> = {
   openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
   anthropic: ['claude-sonnet-4-20250514', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
   gemini: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
-  ollama: ['llama3.2', 'llama3.1', 'mistral', 'mixtral', 'codellama', 'phi3'],
+  ollama: ['qwen3', 'llama3.2', 'llama3.1', 'mistral', 'mixtral', 'codellama', 'phi3'],
 };
 
 // ============ Message Types ============
@@ -146,7 +146,8 @@ export type RecommendationType =
   | 'fill_value'        // Fill "not available" or empty values
   | 'correct_value'     // Correct invalid or inconsistent values
   | 'ontology_suggestion' // Suggest proper ontology terms
-  | 'consistency_fix';  // Fix consistency issues across samples
+  | 'consistency_fix'   // Fix consistency issues across samples
+  | 'add_column';       // Add a missing column
 
 /**
  * Confidence level for a recommendation.
@@ -373,6 +374,7 @@ export function createEmptyRecommendationResult(
         correct_value: 0,
         ontology_suggestion: 0,
         consistency_fix: 0,
+        add_column: 0,
       },
       byConfidence: {
         high: 0,
@@ -401,7 +403,7 @@ export function generateRecommendationId(): string {
 export function getProviderDisplayName(provider: LlmProviderType): string {
   const names: Record<LlmProviderType, string> = {
     openai: 'OpenAI',
-    anthropic: 'Anthropic',
+    anthropic: 'Claude',
     gemini: 'Google Gemini',
     ollama: 'Ollama (Local)',
   };
@@ -424,6 +426,90 @@ export function isProviderConfigured(config: LlmProviderConfig | undefined): boo
   return !!config.apiKey && config.apiKey.length > 0;
 }
 
+// ============ Chat Suggestion Types ============
+
+/**
+ * Types of chat suggestions (actionable recommendations from chat).
+ */
+export type ChatSuggestionType =
+  | 'set_value'      // Set a value in one or more cells
+  | 'remove_column'  // Remove a column
+  | 'rename_column'  // Rename a column
+  | 'add_column';    // Add a new column
+
+/**
+ * A suggestion from chat that can be applied to the table.
+ */
+export interface ChatSuggestion {
+  /** Unique identifier */
+  id: string;
+
+  /** Type of suggestion */
+  type: ChatSuggestionType;
+
+  /** Column name this suggestion applies to */
+  column: string;
+
+  /** Sample indices for set_value type (1-based) */
+  sampleIndices?: number[];
+
+  /** Current value (for display) */
+  currentValue?: string;
+
+  /** Suggested value */
+  suggestedValue?: string;
+
+  /** New column name (for rename_column) */
+  newColumnName?: string;
+
+  /** Human-readable description */
+  description: string;
+
+  /** Confidence level */
+  confidence: RecommendationConfidence;
+
+  /** Whether this suggestion has been applied */
+  applied?: boolean;
+
+  /** Whether this suggestion has been dismissed */
+  dismissed?: boolean;
+}
+
+/**
+ * A chat message with optional suggestions.
+ */
+export interface ChatMessage {
+  /** Message role */
+  role: 'user' | 'assistant';
+
+  /** Text content */
+  content: string;
+
+  /** Actionable suggestions (assistant messages only) */
+  suggestions?: ChatSuggestion[];
+
+  /** Timestamp */
+  timestamp?: Date;
+}
+
+/**
+ * Parsed chat response from LLM.
+ */
+export interface ParsedChatResponse {
+  /** Text explanation */
+  text: string;
+
+  /** Actionable suggestions */
+  suggestions: ChatSuggestion[];
+}
+
+/**
+ * Generates a unique suggestion ID.
+ */
+export function generateSuggestionId(): string {
+  return `sug_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+}
+
 /**
  * Creates a summary from recommendations.
  */
@@ -435,6 +521,7 @@ export function createRecommendationSummary(
     correct_value: 0,
     ontology_suggestion: 0,
     consistency_fix: 0,
+    add_column: 0,
   };
 
   const byConfidence: Record<RecommendationConfidence, number> = {

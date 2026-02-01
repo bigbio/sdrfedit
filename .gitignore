@@ -2,6 +2,12 @@
 .angular/
 # dist/ - NOT ignored, committed for jsDelivr CDN
 
+# Local scripts (user-specific paths)
+scripts/*-local.sh
+scripts/*-local.json
+scripts/local-*.sh
+scripts/local-*.json
+
 # Node
 node_modules/
 package-lock.json

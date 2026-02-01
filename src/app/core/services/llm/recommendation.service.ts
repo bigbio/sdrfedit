@@ -22,8 +22,9 @@ import { SdrfTable } from '../../models/sdrf-table';
 import { ILlmProvider } from './providers/base-provider';
 import { OpenAIProvider } from './providers/openai-provider';
 import { ContextBuilderService, YamlTemplate } from './context-builder.service';
-import { PromptService } from './prompt.service';
+import { PromptService, QualityIssueForPrompt } from './prompt.service';
 import { LlmSettingsService, llmSettingsService } from './settings.service';
+import { ColumnQualityService, TableQualityResult, ColumnQuality } from '../column-quality.service';
 
 /**
  * Cache entry for recommendations.
@@ -55,9 +56,18 @@ const DEFAULT_CONFIG: RecommendationServiceConfig = {
 };
 
 /**
+ * Enhanced result including quality analysis.
+ */
+export interface EnhancedRecommendationResult extends RecommendationResult {
+  /** Quality analysis of all columns */
+  qualityAnalysis?: TableQualityResult;
+}
+
+/**
  * Recommendation Service
  *
  * Generates AI-powered recommendations for improving SDRF files.
+ * Now integrates with ColumnQualityService for enhanced prompts.
  */
 export class RecommendationService {
   private config: RecommendationServiceConfig;
@@ -66,6 +76,7 @@ export class RecommendationService {
   private contextBuilder: ContextBuilderService;
   private promptService: PromptService;
   private settingsService: LlmSettingsService;
+  private qualityService: ColumnQualityService;
 
   constructor(
     config: RecommendationServiceConfig = {},
@@ -75,18 +86,21 @@ export class RecommendationService {
     this.contextBuilder = new ContextBuilderService();
     this.promptService = new PromptService(this.contextBuilder);
     this.settingsService = settingsService || llmSettingsService;
+    this.qualityService = new ColumnQualityService();
   }
 
   // ============ Public API ============
 
   /**
    * Analyzes an SDRF table and generates recommendations.
+   * Now includes quality analysis for enhanced prompts.
    */
   async analyze(
     table: SdrfTable,
     focusAreas: AnalysisFocusArea[] = ['all'],
-    template?: YamlTemplate
-  ): Promise<RecommendationResult> {
+    template?: YamlTemplate,
+    includeQualityAnalysis: boolean = true
+  ): Promise<EnhancedRecommendationResult> {
     const provider = await this.getActiveProvider();
     const config = this.settingsService.getActiveProviderConfig();
 
@@ -106,16 +120,26 @@ export class RecommendationService {
       }
     }
 
+    // Perform quality analysis to enhance prompts
+    let qualityAnalysis: TableQualityResult | undefined;
+    let qualityIssues: QualityIssueForPrompt[] = [];
+
+    if (includeQualityAnalysis) {
+      qualityAnalysis = this.qualityService.analyzeTable(table);
+      qualityIssues = this.promptService.convertQualityToPromptIssues(qualityAnalysis.columns);
+    }
+
     // Build context
     const context = this.contextBuilder.buildContext(table, focusAreas, template);
 
-    // If no issues found, return empty result
-    if (context.issues.length === 0) {
-      return createEmptyRecommendationResult(config.provider, config.model);
+    // If no issues found and no quality issues, return empty result
+    if (context.issues.length === 0 && qualityIssues.length === 0) {
+      const emptyResult = createEmptyRecommendationResult(config.provider, config.model);
+      return { ...emptyResult, qualityAnalysis };
     }
 
-    // Build messages
-    const messages = this.promptService.buildAnalysisMessages(context);
+    // Build messages with quality issues for enhanced prompts
+    const messages = this.promptService.buildAnalysisMessages(context, undefined, qualityIssues);
 
     // Call LLM
     const response = await provider.complete(messages);
@@ -124,13 +148,14 @@ export class RecommendationService {
     const recommendations = this.parseRecommendations(response.content, table);
 
     // Build result
-    const result: RecommendationResult = {
+    const result: EnhancedRecommendationResult = {
       recommendations: recommendations.slice(0, this.config.maxRecommendations),
       summary: createRecommendationSummary(recommendations),
       rawResponse: response.content,
       timestamp: new Date(),
       provider: config.provider,
       model: config.model,
+      qualityAnalysis,
     };
 
     // Cache result
@@ -142,14 +167,31 @@ export class RecommendationService {
   }
 
   /**
+   * Performs quality analysis only (without LLM).
+   * Useful for quick column quality checks.
+   */
+  analyzeQuality(table: SdrfTable): TableQualityResult {
+    return this.qualityService.analyzeTable(table);
+  }
+
+  /**
+   * Gets the quality service for direct access.
+   */
+  getQualityService(): ColumnQualityService {
+    return this.qualityService;
+  }
+
+  /**
    * Analyzes with streaming response.
    * Yields partial content as it arrives, then returns final result.
+   * Now includes quality analysis for enhanced prompts.
    */
   async *analyzeStreaming(
     table: SdrfTable,
     focusAreas: AnalysisFocusArea[] = ['all'],
-    template?: YamlTemplate
-  ): AsyncGenerator<string, RecommendationResult, unknown> {
+    template?: YamlTemplate,
+    includeQualityAnalysis: boolean = true
+  ): AsyncGenerator<string, EnhancedRecommendationResult, unknown> {
     const provider = await this.getActiveProvider();
     const config = this.settingsService.getActiveProviderConfig();
 
@@ -159,14 +201,23 @@ export class RecommendationService {
 
     if (!provider.supportsStreaming) {
       // Fall back to non-streaming
-      const result = await this.analyze(table, focusAreas, template);
+      const result = await this.analyze(table, focusAreas, template, includeQualityAnalysis);
       yield result.rawResponse || '';
       return result;
     }
 
-    // Build context and messages
+    // Perform quality analysis
+    let qualityAnalysis: TableQualityResult | undefined;
+    let qualityIssues: QualityIssueForPrompt[] = [];
+
+    if (includeQualityAnalysis) {
+      qualityAnalysis = this.qualityService.analyzeTable(table);
+      qualityIssues = this.promptService.convertQualityToPromptIssues(qualityAnalysis.columns);
+    }
+
+    // Build context and messages with quality issues
     const context = this.contextBuilder.buildContext(table, focusAreas, template);
-    const messages = this.promptService.buildAnalysisMessages(context);
+    const messages = this.promptService.buildAnalysisMessages(context, undefined, qualityIssues);
 
     // Stream response
     let fullContent = '';
@@ -178,13 +229,14 @@ export class RecommendationService {
     // Parse final response
     const recommendations = this.parseRecommendations(fullContent, table);
 
-    const result: RecommendationResult = {
+    const result: EnhancedRecommendationResult = {
       recommendations: recommendations.slice(0, this.config.maxRecommendations),
       summary: createRecommendationSummary(recommendations),
       rawResponse: fullContent,
       timestamp: new Date(),
       provider: config.provider,
       model: config.model,
+      qualityAnalysis,
     };
 
     // Cache result
@@ -348,29 +400,76 @@ export class RecommendationService {
     table: SdrfTable
   ): SdrfRecommendation[] {
     try {
-      // Extract JSON from response
-      const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/);
-      const jsonStr = jsonMatch ? jsonMatch[1] : content;
+      // Multiple strategies to extract JSON from the response
+      let parsed: any = null;
 
-      // Try to parse as JSON
-      let parsed: any;
-      try {
-        parsed = JSON.parse(jsonStr);
-      } catch {
-        // Try to find JSON object in the response
-        const objectMatch = content.match(/\{[\s\S]*"recommendations"[\s\S]*\}/);
+      // Strategy 1: Extract from markdown code block
+      const jsonCodeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (jsonCodeBlockMatch) {
+        try {
+          parsed = JSON.parse(jsonCodeBlockMatch[1].trim());
+        } catch {
+          // Continue to next strategy
+        }
+      }
+
+      // Strategy 2: Try parsing the entire content as JSON
+      if (!parsed) {
+        try {
+          parsed = JSON.parse(content.trim());
+        } catch {
+          // Continue to next strategy
+        }
+      }
+
+      // Strategy 3: Find JSON object containing "recommendations" array
+      if (!parsed) {
+        const objectMatch = content.match(/\{[\s\S]*?"recommendations"\s*:\s*\[[\s\S]*?\][\s\S]*?\}/);
         if (objectMatch) {
-          parsed = JSON.parse(objectMatch[0]);
-        } else {
-          console.warn('Failed to parse recommendations JSON');
+          try {
+            parsed = JSON.parse(objectMatch[0]);
+          } catch {
+            // Continue to next strategy
+          }
+        }
+      }
+
+      // Strategy 4: Find any JSON array (might be the recommendations directly)
+      if (!parsed) {
+        const arrayMatch = content.match(/\[[\s\S]*?\{[\s\S]*?"column"[\s\S]*?\}[\s\S]*?\]/);
+        if (arrayMatch) {
+          try {
+            parsed = JSON.parse(arrayMatch[0]);
+          } catch {
+            // Continue to next strategy
+          }
+        }
+      }
+
+      // Strategy 5: Try to find and fix common JSON issues (trailing commas, etc)
+      if (!parsed) {
+        try {
+          // Remove any text before first { or [
+          let cleaned = content.replace(/^[^{[]*/, '');
+          // Remove any text after last } or ]
+          cleaned = cleaned.replace(/[^}\]]*$/, '');
+          // Remove trailing commas before ] or }
+          cleaned = cleaned.replace(/,\s*([\]}])/g, '$1');
+          parsed = JSON.parse(cleaned);
+        } catch {
+          console.warn('Failed to parse recommendations JSON after all strategies');
           return [];
         }
       }
 
       // Extract recommendations array
-      const rawRecs = parsed.recommendations || parsed;
-      if (!Array.isArray(rawRecs)) {
-        console.warn('Recommendations is not an array');
+      let rawRecs: any[];
+      if (Array.isArray(parsed)) {
+        rawRecs = parsed;
+      } else if (parsed && Array.isArray(parsed.recommendations)) {
+        rawRecs = parsed.recommendations;
+      } else {
+        console.warn('Could not find recommendations array in response');
         return [];
       }
 
@@ -384,6 +483,7 @@ export class RecommendationService {
         }
       }
 
+      console.log(`Parsed ${recommendations.length} recommendations from LLM response`);
       return recommendations;
     } catch (error) {
       console.error('Failed to parse recommendations:', error);
@@ -433,6 +533,7 @@ export class RecommendationService {
       'correct_value',
       'ontology_suggestion',
       'consistency_fix',
+      'add_column',
     ];
     const type = validTypes.includes(raw.type) ? raw.type : 'fill_value';
 

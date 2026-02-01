@@ -31,6 +31,10 @@ import {
   AnalysisFocusArea,
   LlmError,
   getProviderDisplayName,
+  ChatSuggestion,
+  ChatMessage,
+  ParsedChatResponse,
+  generateSuggestionId,
 } from '../../core/models/llm';
 import { SdrfTable } from '../../core/models/sdrf-table';
 import {
@@ -41,6 +45,28 @@ import {
   LlmSettingsService,
   llmSettingsService,
 } from '../../core/services/llm/settings.service';
+import {
+  ColumnQualityService,
+  TableQualityResult,
+  ColumnQuality,
+} from '../../core/services/column-quality.service';
+import {
+  DataCleaningService,
+  AutoFix,
+  FixResult,
+  dataCleaningService,
+} from '../../core/services/data-cleaning.service';
+import {
+  SdrfExamplesService,
+  sdrfExamplesService,
+} from '../../core/services/sdrf-examples.service';
+import { promptService } from '../../core/services/llm/prompt.service';
+import {
+  PyodideValidatorService,
+  pyodideValidatorService,
+  ValidationError,
+} from '../../core/services/pyodide-validator.service';
+import { sdrfExport } from '../../core/services/sdrf-export.service';
 
 export interface ApplyRecommendationEvent {
   recommendation: SdrfRecommendation;
@@ -50,8 +76,14 @@ export interface BatchApplyEvent {
   recommendations: SdrfRecommendation[];
 }
 
+export interface ApplyFixEvent {
+  table: SdrfTable;
+  fix: AutoFix;
+  result: FixResult;
+}
+
 type SortOption = 'confidence' | 'column' | 'type' | 'samples';
-type ViewTab = 'recommendations' | 'chat' | 'advanced';
+type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
 
 @Component({
   selector: 'sdrf-recommend-panel',
@@ -90,10 +122,20 @@ type ViewTab = 'recommendations' | 'chat' | 'advanced';
         <div class="panel-tabs">
           <button
             class="tab"
+            [class.active]="activeTab() === 'quality'"
+            (click)="activeTab.set('quality')"
+          >
+            Quality
+            @if (qualityIssueCount() > 0) {
+              <span class="tab-badge tab-badge-warn">{{ qualityIssueCount() }}</span>
+            }
+          </button>
+          <button
+            class="tab"
             [class.active]="activeTab() === 'recommendations'"
             (click)="activeTab.set('recommendations')"
           >
-            Recommendations
+            AI Suggest
             @if (result() && result()!.recommendations.length > 0) {
               <span class="tab-badge">{{ result()!.recommendations.length }}</span>
             }
@@ -116,6 +158,294 @@ type ViewTab = 'recommendations' | 'chat' | 'advanced';
 
         <!-- Tab Content -->
         <div class="panel-content">
+          <!-- Quality Tab -->
+          @if (activeTab() === 'quality') {
+            <div class="quality-tab">
+              <!-- Analyze Button -->
+              <div class="quality-actions">
+                <button
+                  class="btn btn-primary btn-block"
+                  [disabled]="qualityAnalyzing() || !table"
+                  (click)="analyzeQuality()"
+                >
+                  @if (qualityAnalyzing()) {
+                    <span class="spinner"></span> Analyzing...
+                  } @else {
+                    Analyze Quality
+                  }
+                </button>
+              </div>
+
+              @if (qualityResult()) {
+                <!-- Summary -->
+                <div class="quality-summary">
+                  <div class="summary-stats">
+                    <div class="stat">
+                      <span class="stat-value">{{ qualityResult()!.summary.totalColumns }}</span>
+                      <span class="stat-label">Columns</span>
+                    </div>
+                    <div class="stat stat-warn" [class.hidden]="qualityResult()!.summary.redundantColumns === 0">
+                      <span class="stat-value">{{ qualityResult()!.summary.redundantColumns }}</span>
+                      <span class="stat-label">Redundant</span>
+                    </div>
+                    <div class="stat stat-error" [class.hidden]="qualityResult()!.summary.effectivelyEmptyColumns === 0">
+                      <span class="stat-value">{{ qualityResult()!.summary.effectivelyEmptyColumns }}</span>
+                      <span class="stat-label">Empty</span>
+                    </div>
+                    <div class="stat stat-warn" [class.hidden]="qualityResult()!.summary.columnsWithIssues === 0">
+                      <span class="stat-value">{{ qualityResult()!.summary.columnsWithIssues }}</span>
+                      <span class="stat-label">Issues</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Auto-Fixes Available -->
+                @if (availableFixes().length > 0) {
+                  <div class="fixes-section">
+                    <div class="section-header">
+                      <h4>Auto-Fixes Available</h4>
+                      <button class="btn btn-sm" (click)="applyAllSafeFixes()" [disabled]="safeFixes().length === 0">
+                        Apply Safe ({{ safeFixes().length }})
+                      </button>
+                    </div>
+                    <div class="fixes-list">
+                      @for (fix of availableFixes(); track fix.id) {
+                        <div class="fix-card" [class.fix-safe]="fix.isSafe">
+                          <div class="fix-icon">
+                            @switch (fix.type) {
+                              @case ('standardize_nulls') { 🔄 }
+                              @case ('fix_reserved_words') { ✓ }
+                              @case ('lowercase_values') { Aa }
+                              @case ('lowercase_column_names') { Aa }
+                              @case ('remove_column') { 🗑️ }
+                            }
+                          </div>
+                          <div class="fix-content">
+                            <div class="fix-desc">{{ fix.description }}</div>
+                            @if (fix.preview && fix.preview.length > 0) {
+                              <div class="fix-preview">
+                                @for (p of fix.preview.slice(0, 2); track $index) {
+                                  <span class="preview-item">
+                                    <span class="prev-old">{{ p.before }}</span>
+                                    <span class="prev-arrow">→</span>
+                                    <span class="prev-new">{{ p.after }}</span>
+                                  </span>
+                                }
+                                @if (fix.preview.length > 2) {
+                                  <span class="preview-more">+{{ fix.preview.length - 2 }} more</span>
+                                }
+                              </div>
+                            }
+                            <div class="fix-meta">
+                              {{ fix.affectedCount }} {{ fix.type === 'remove_column' ? 'column' : 'cell' }}{{ fix.affectedCount > 1 ? 's' : '' }}
+                              @if (fix.isSafe) {
+                                <span class="safe-badge">Safe</span>
+                              } @else {
+                                <span class="review-badge">Review</span>
+                              }
+                            </div>
+                          </div>
+                          <button class="btn btn-xs btn-primary" (click)="applyFixAction(fix)">
+                            Apply
+                          </button>
+                        </div>
+                      }
+                    </div>
+                  </div>
+                }
+
+                <!-- Column Issues -->
+                @if (columnsWithIssues().length > 0) {
+                  <div class="issues-section">
+                    <div class="section-header">
+                      <h4>Column Issues</h4>
+                    </div>
+                    <div class="issues-list">
+                      @for (col of columnsWithIssues(); track col.columnIndex) {
+                        <div class="issue-card" [class]="'action-' + col.action">
+                          <div class="issue-header">
+                            <span class="issue-col-name">{{ col.name }}</span>
+                            <span class="action-badge" [class]="'badge-' + col.action">
+                              {{ col.action }}
+                            </span>
+                          </div>
+                          <div class="issue-reason">{{ col.reason }}</div>
+                          @if (col.suggestedFix) {
+                            <div class="issue-fix">💡 {{ col.suggestedFix }}</div>
+                          }
+                          <div class="issue-stats">
+                            <span>{{ col.uniqueValues }} unique</span>
+                            <span>{{ col.emptyCount }} empty</span>
+                            <span>{{ col.notAvailableCount }} N/A</span>
+                          </div>
+                        </div>
+                      }
+                    </div>
+                  </div>
+                }
+
+                <!-- Good Columns -->
+                @if (goodColumns().length > 0) {
+                  <details class="good-section">
+                    <summary>
+                      ✅ {{ goodColumns().length }} columns OK
+                    </summary>
+                    <div class="good-list">
+                      @for (col of goodColumns(); track col.columnIndex) {
+                        <div class="good-item">{{ col.name }}</div>
+                      }
+                    </div>
+                  </details>
+                }
+              } @else {
+                <div class="empty-quality">
+                  @if (isLargeTable()) {
+                    <div class="large-table-warning">
+                      <p><strong>Large table detected</strong></p>
+                      <p>This table has {{ table?.sampleCount }} samples. Quality analysis was not run automatically to avoid slowing down your browser.</p>
+                      <p>Click "Analyze Quality" to run the analysis manually.</p>
+                    </div>
+                  } @else {
+                    <p>Click "Analyze Quality" to detect issues in your SDRF columns.</p>
+                    <ul class="quality-checks">
+                      <li>Columns with 100% identical values</li>
+                      <li>Columns with 100% "not available"</li>
+                      <li>Inconsistent case or null representations</li>
+                      <li>Wrong reserved words (control → normal)</li>
+                    </ul>
+                  }
+                </div>
+              }
+
+              <!-- Pyodide Validation Section -->
+              <div class="pyodide-section">
+                <div class="section-header">
+                  <h4>sdrf-pipelines Validation</h4>
+                  @if (pyodideState() === 'not-loaded') {
+                    <span class="pyodide-badge badge-info">Not loaded</span>
+                  } @else if (pyodideState() === 'loading') {
+                    <span class="pyodide-badge badge-loading">Loading...</span>
+                  } @else if (pyodideState() === 'ready') {
+                    <span class="pyodide-badge badge-ready">Ready</span>
+                  } @else if (pyodideState() === 'error') {
+                    <span class="pyodide-badge badge-error">Error</span>
+                  }
+                </div>
+
+                @if (pyodideState() === 'not-loaded') {
+                  <div class="pyodide-info">
+                    <p>Run validation using the official sdrf-pipelines Python tool directly in your browser.</p>
+                    <p class="pyodide-note">First load downloads ~15MB (cached afterwards).</p>
+                  </div>
+                }
+
+                @if (pyodideState() === 'loading') {
+                  <div class="pyodide-loading">
+                    <span class="spinner"></span>
+                    <span class="progress-text">{{ pyodideLoadProgress() }}</span>
+                  </div>
+                }
+
+                @if (pyodideState() === 'ready' || pyodideState() === 'not-loaded') {
+                  <!-- Template Selector -->
+                  <div class="template-selector">
+                    <label>Templates to validate against:</label>
+                    <div class="template-checkboxes">
+                      @for (template of pyodideAvailableTemplates(); track template) {
+                        <label class="template-option">
+                          <input
+                            type="checkbox"
+                            [checked]="selectedTemplates().includes(template)"
+                            (change)="toggleTemplate(template)"
+                          />
+                          {{ template }}
+                        </label>
+                      }
+                      @if (pyodideAvailableTemplates().length === 0) {
+                        @for (template of ['default', 'human', 'vertebrates', 'nonvertebrates', 'plants', 'cell_lines']; track template) {
+                          <label class="template-option">
+                            <input
+                              type="checkbox"
+                              [checked]="selectedTemplates().includes(template)"
+                              (change)="toggleTemplate(template)"
+                            />
+                            {{ template }}
+                          </label>
+                        }
+                      }
+                    </div>
+                  </div>
+
+                  <button
+                    class="btn btn-primary btn-block"
+                    [disabled]="pyodideValidating() || !table || selectedTemplates().length === 0"
+                    (click)="runPyodideValidation()"
+                  >
+                    @if (pyodideValidating()) {
+                      <span class="spinner"></span> Validating...
+                    } @else if (pyodideState() === 'not-loaded') {
+                      Load & Validate
+                    } @else {
+                      Validate with sdrf-pipelines
+                    }
+                  </button>
+                }
+
+                @if (pyodideState() === 'error') {
+                  <div class="pyodide-error">
+                    <p>Failed to load Pyodide: {{ pyodideLastError() }}</p>
+                    <button class="btn btn-sm" (click)="initPyodide()">Retry</button>
+                  </div>
+                }
+
+                <!-- Validation Results -->
+                @if (pyodideErrors().length > 0) {
+                  <div class="validation-results">
+                    <div class="validation-summary">
+                      @if (pyodideErrorCount() > 0) {
+                        <span class="error-count">{{ pyodideErrorCount() }} errors</span>
+                      }
+                      @if (pyodideWarningCount() > 0) {
+                        <span class="warning-count">{{ pyodideWarningCount() }} warnings</span>
+                      }
+                    </div>
+                    <div class="validation-errors-list">
+                      @for (error of pyodideErrors(); track $index) {
+                        <div class="validation-error" [class]="'level-' + error.level">
+                          <div class="error-header">
+                            <span class="error-level">{{ error.level === 'error' ? '❌' : '⚠️' }}</span>
+                            <span class="error-message">{{ error.message }}</span>
+                          </div>
+                          @if (error.row >= 0 || error.column) {
+                            <div class="error-location">
+                              @if (error.row >= 0) {
+                                <button class="link-btn" (click)="jumpToValidationError(error)">
+                                  Row {{ error.row + 1 }}@if (error.column) {, {{ error.column }}}
+                                </button>
+                              } @else if (error.column) {
+                                <span>Column: {{ error.column }}</span>
+                              }
+                              @if (error.value) {
+                                <span class="error-value">Value: "{{ error.value }}"</span>
+                              }
+                            </div>
+                          }
+                          @if (error.suggestion) {
+                            <div class="error-suggestion">💡 {{ error.suggestion }}</div>
+                          }
+                        </div>
+                      }
+                    </div>
+                  </div>
+                } @else if (pyodideHasValidated() && pyodideErrors().length === 0 && !pyodideValidating()) {
+                  <div class="validation-empty">
+                    <p class="success-msg">✅ No validation errors found!</p>
+                  </div>
+                }
+              </div>
+            </div>
+          }
+
           <!-- Recommendations Tab -->
           @if (activeTab() === 'recommendations') {
             <div class="recommendations-tab">
@@ -303,21 +633,65 @@ type ViewTab = 'recommendations' | 'chat' | 'advanced';
                   <div class="chat-msg" [class]="'msg-' + msg.role">
                     <div class="msg-role">{{ msg.role === 'user' ? 'You' : 'AI' }}</div>
                     <div class="msg-content">{{ msg.content }}</div>
+
+                    <!-- Chat Suggestion Cards -->
+                    @if (msg.suggestions && msg.suggestions.length > 0) {
+                      <div class="chat-suggestions">
+                        @for (suggestion of msg.suggestions; track suggestion.id) {
+                          <div class="suggestion-card"
+                               [class.applied]="suggestion.applied"
+                               [class.dismissed]="suggestion.dismissed">
+                            <div class="suggestion-confidence-bar" [class]="'conf-' + suggestion.confidence"></div>
+                            <div class="suggestion-content">
+                              <div class="suggestion-desc">{{ suggestion.description }}</div>
+                              @if (suggestion.type === 'set_value' && suggestion.currentValue) {
+                                <div class="suggestion-change">
+                                  <span class="old-val">{{ suggestion.currentValue }}</span>
+                                  <span class="arrow">→</span>
+                                  <span class="new-val">{{ suggestion.suggestedValue }}</span>
+                                </div>
+                              }
+                              <div class="suggestion-meta">
+                                <span>{{ getSuggestionSampleLabel(suggestion) }}</span>
+                                <span class="conf-badge" [class]="'conf-' + suggestion.confidence">{{ suggestion.confidence }}</span>
+                              </div>
+                              <div class="suggestion-actions">
+                                @if (!suggestion.applied && !suggestion.dismissed) {
+                                  <button class="btn btn-primary btn-xs" (click)="applyChatSuggestion(suggestion, msg)">
+                                    Apply
+                                  </button>
+                                  <button class="btn btn-xs btn-muted" (click)="dismissChatSuggestion(suggestion, msg)">
+                                    Dismiss
+                                  </button>
+                                } @else if (suggestion.applied) {
+                                  <span class="applied-label">✓ Applied</span>
+                                } @else if (suggestion.dismissed) {
+                                  <span class="dismissed-label">Dismissed</span>
+                                }
+                              </div>
+                            </div>
+                          </div>
+                        }
+                      </div>
+                    }
                   </div>
                 }
                 @if (chatMessages().length === 0) {
                   <div class="chat-empty">
-                    <p>Ask questions or provide additional context to refine recommendations.</p>
-                    <p class="hint">Examples:</p>
+                    <p>Ask questions or get actionable suggestions for your SDRF data.</p>
+                    <p class="hint">Try these examples:</p>
                     <ul class="hint-list">
                       <li (click)="sendChatMessage('What columns have the most issues?')">
                         "What columns have the most issues?"
                       </li>
-                      <li (click)="sendChatMessage('The samples are from a clinical trial with healthy controls')">
-                        "The samples are from a clinical trial..."
+                      <li (click)="sendChatMessage('Change control to normal in the disease column')">
+                        "Change control to normal in disease column"
                       </li>
-                      <li (click)="sendChatMessage('Focus only on the organism and disease columns')">
-                        "Focus only on organism and disease columns"
+                      <li (click)="sendChatMessage('What should I put in developmental stage?')">
+                        "What should I put in developmental stage?"
+                      </li>
+                      <li (click)="sendChatMessage('Fix the inconsistent null values')">
+                        "Fix the inconsistent null values"
                       </li>
                     </ul>
                   </div>
@@ -329,7 +703,7 @@ type ViewTab = 'recommendations' | 'chat' | 'advanced';
                   [value]="chatInput()"
                   (input)="onChatInput($event)"
                   (keydown.enter)="onChatEnter($event)"
-                  placeholder="Ask a question or provide context..."
+                  placeholder="Ask a question or request changes..."
                   rows="2"
                 ></textarea>
                 <button
@@ -405,12 +779,9 @@ type ViewTab = 'recommendations' | 'chat' | 'advanced';
   `,
   styles: [`
     .ai-panel {
-      width: 400px;
-      min-width: 350px;
-      max-width: 500px;
+      width: 100%;
       height: 100%;
       background: white;
-      border-left: 1px solid #e5e7eb;
       display: flex;
       flex-direction: column;
       font-size: 13px;
@@ -499,6 +870,10 @@ type ViewTab = 'recommendations' | 'chat' | 'advanced';
       font-size: 10px;
       padding: 1px 6px;
       border-radius: 10px;
+    }
+
+    .tab-badge-warn {
+      background: #f59e0b;
     }
 
     .panel-content {
@@ -835,6 +1210,91 @@ type ViewTab = 'recommendations' | 'chat' | 'advanced';
     .msg-assistant .msg-content {
       background: #f3f4f6;
       color: #374151;
+      white-space: pre-wrap;
+    }
+
+    /* Chat Suggestion Cards */
+    .chat-suggestions {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .suggestion-card {
+      display: flex;
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
+      transition: opacity 0.2s;
+    }
+
+    .suggestion-card.applied {
+      opacity: 0.6;
+      background: #f0fdf4;
+      border-color: #86efac;
+    }
+
+    .suggestion-card.dismissed {
+      opacity: 0.5;
+      background: #fafafa;
+    }
+
+    .suggestion-confidence-bar {
+      width: 4px;
+      flex-shrink: 0;
+    }
+    .suggestion-confidence-bar.conf-high { background: #22c55e; }
+    .suggestion-confidence-bar.conf-medium { background: #f59e0b; }
+    .suggestion-confidence-bar.conf-low { background: #9ca3af; }
+
+    .suggestion-content {
+      flex: 1;
+      padding: 8px 10px;
+    }
+
+    .suggestion-desc {
+      font-size: 11px;
+      color: #374151;
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+
+    .suggestion-change {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+      flex-wrap: wrap;
+    }
+
+    .suggestion-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 10px;
+      color: #9ca3af;
+      margin-bottom: 6px;
+    }
+
+    .conf-badge {
+      font-size: 9px;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .conf-badge.conf-high { background: #d1fae5; color: #059669; }
+    .conf-badge.conf-medium { background: #fef3c7; color: #d97706; }
+    .conf-badge.conf-low { background: #f3f4f6; color: #6b7280; }
+
+    .suggestion-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .dismissed-label {
+      color: #9ca3af;
+      font-size: 10px;
     }
 
     .chat-input-area {
@@ -982,18 +1442,555 @@ type ViewTab = 'recommendations' | 'chat' | 'advanced';
     }
 
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Quality Tab */
+    .quality-tab {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      overflow-y: auto;
+    }
+
+    .quality-actions {
+      padding: 12px 16px;
+      border-bottom: 1px solid #e5e7eb;
+      flex-shrink: 0;
+    }
+
+    .quality-summary {
+      padding: 12px 16px;
+      border-bottom: 1px solid #e5e7eb;
+      flex-shrink: 0;
+    }
+
+    .summary-stats {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .stat {
+      text-align: center;
+      padding: 8px 12px;
+      background: #f3f4f6;
+      border-radius: 6px;
+      min-width: 60px;
+    }
+
+    .stat-value {
+      display: block;
+      font-size: 18px;
+      font-weight: 600;
+      color: #374151;
+    }
+
+    .stat-label {
+      font-size: 10px;
+      color: #6b7280;
+    }
+
+    .stat-warn { background: #fef3c7; }
+    .stat-warn .stat-value { color: #d97706; }
+
+    .stat-error { background: #fee2e2; }
+    .stat-error .stat-value { color: #dc2626; }
+
+    .stat.hidden { display: none; }
+
+    .fixes-section, .issues-section {
+      padding: 12px 16px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .section-header h4 {
+      margin: 0;
+      font-size: 12px;
+      font-weight: 600;
+      color: #374151;
+    }
+
+    .fixes-list, .issues-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .fix-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+    }
+
+    .fix-card.fix-safe {
+      border-left: 3px solid #22c55e;
+    }
+
+    .fix-icon {
+      font-size: 14px;
+      width: 24px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .fix-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .fix-desc {
+      font-size: 12px;
+      color: #374151;
+      margin-bottom: 4px;
+    }
+
+    .fix-preview {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+
+    .preview-item {
+      font-size: 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .prev-old {
+      color: #9ca3af;
+      text-decoration: line-through;
+    }
+
+    .prev-arrow { color: #6b7280; }
+
+    .prev-new {
+      color: #059669;
+      background: #d1fae5;
+      padding: 1px 4px;
+      border-radius: 2px;
+    }
+
+    .preview-more {
+      font-size: 10px;
+      color: #9ca3af;
+    }
+
+    .fix-meta {
+      font-size: 10px;
+      color: #9ca3af;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .safe-badge {
+      background: #d1fae5;
+      color: #059669;
+      padding: 1px 6px;
+      border-radius: 8px;
+      font-size: 9px;
+    }
+
+    .review-badge {
+      background: #fef3c7;
+      color: #d97706;
+      padding: 1px 6px;
+      border-radius: 8px;
+      font-size: 9px;
+    }
+
+    .issue-card {
+      padding: 10px 12px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      border-left: 3px solid #9ca3af;
+    }
+
+    .issue-card.action-remove { border-left-color: #dc2626; }
+    .issue-card.action-review { border-left-color: #f59e0b; }
+
+    .issue-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+
+    .issue-col-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: #374151;
+    }
+
+    .action-badge {
+      font-size: 9px;
+      padding: 2px 6px;
+      border-radius: 8px;
+      text-transform: uppercase;
+      font-weight: 500;
+    }
+
+    .badge-remove { background: #fee2e2; color: #dc2626; }
+    .badge-review { background: #fef3c7; color: #d97706; }
+    .badge-keep { background: #d1fae5; color: #059669; }
+
+    .issue-reason {
+      font-size: 11px;
+      color: #6b7280;
+      margin-bottom: 4px;
+    }
+
+    .issue-fix {
+      font-size: 11px;
+      color: #059669;
+      background: #f0fdf4;
+      padding: 4px 8px;
+      border-radius: 4px;
+      margin-bottom: 4px;
+    }
+
+    .issue-stats {
+      display: flex;
+      gap: 12px;
+      font-size: 10px;
+      color: #9ca3af;
+    }
+
+    .good-section {
+      padding: 12px 16px;
+    }
+
+    .good-section summary {
+      cursor: pointer;
+      font-size: 12px;
+      color: #059669;
+      font-weight: 500;
+    }
+
+    .good-list {
+      margin-top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .good-item {
+      font-size: 11px;
+      padding: 4px 8px;
+      background: #f3f4f6;
+      border-radius: 4px;
+      color: #4b5563;
+    }
+
+    .empty-quality {
+      padding: 30px 20px;
+      text-align: center;
+      color: #6b7280;
+      font-size: 12px;
+    }
+
+    .quality-checks {
+      text-align: left;
+      margin: 16px auto;
+      max-width: 250px;
+      padding-left: 20px;
+    }
+
+    .quality-checks li {
+      margin-bottom: 6px;
+      font-size: 11px;
+      color: #9ca3af;
+    }
+
+    .large-table-warning {
+      background: #fef3c7;
+      border: 1px solid #f59e0b;
+      border-radius: 8px;
+      padding: 16px;
+      margin: 8px;
+      text-align: left;
+    }
+
+    .large-table-warning p {
+      margin: 0 0 8px 0;
+      font-size: 12px;
+      color: #92400e;
+    }
+
+    .large-table-warning p:last-child {
+      margin-bottom: 0;
+    }
+
+    /* Pyodide Validation Section */
+    .pyodide-section {
+      padding: 16px;
+      border-top: 1px solid #e5e7eb;
+      margin-top: 12px;
+    }
+
+    .pyodide-section .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .pyodide-section .section-header h4 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+      color: #374151;
+    }
+
+    .pyodide-badge {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-weight: 500;
+    }
+
+    .badge-info { background: #e0e7ff; color: #4338ca; }
+    .badge-loading { background: #fef3c7; color: #d97706; }
+    .badge-ready { background: #d1fae5; color: #059669; }
+    .badge-error { background: #fee2e2; color: #dc2626; }
+
+    .pyodide-info {
+      font-size: 12px;
+      color: #6b7280;
+      margin-bottom: 12px;
+    }
+
+    .pyodide-info p {
+      margin: 0 0 6px 0;
+    }
+
+    .pyodide-note {
+      font-size: 11px;
+      color: #9ca3af;
+      font-style: italic;
+    }
+
+    .pyodide-loading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px;
+      background: #fef3c7;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+
+    .pyodide-loading .progress-text {
+      font-size: 12px;
+      color: #92400e;
+    }
+
+    .template-selector {
+      margin-bottom: 12px;
+    }
+
+    .template-selector label {
+      display: block;
+      font-size: 11px;
+      color: #6b7280;
+      margin-bottom: 8px;
+    }
+
+    .template-checkboxes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .template-option {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: #374151;
+      cursor: pointer;
+      padding: 4px 8px;
+      background: #f3f4f6;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+
+    .template-option:hover {
+      background: #e5e7eb;
+    }
+
+    .template-option input[type="checkbox"] {
+      margin: 0;
+    }
+
+    .pyodide-error {
+      padding: 12px;
+      background: #fee2e2;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+
+    .pyodide-error p {
+      margin: 0 0 8px 0;
+      font-size: 12px;
+      color: #b91c1c;
+    }
+
+    .validation-results {
+      margin-top: 16px;
+    }
+
+    .validation-summary {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .error-count {
+      font-size: 12px;
+      font-weight: 600;
+      color: #dc2626;
+      background: #fee2e2;
+      padding: 4px 10px;
+      border-radius: 12px;
+    }
+
+    .warning-count {
+      font-size: 12px;
+      font-weight: 600;
+      color: #d97706;
+      background: #fef3c7;
+      padding: 4px 10px;
+      border-radius: 12px;
+    }
+
+    .validation-errors-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .validation-error {
+      padding: 10px 12px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      border-left: 3px solid #9ca3af;
+    }
+
+    .validation-error.level-error {
+      border-left-color: #dc2626;
+      background: #fef2f2;
+    }
+
+    .validation-error.level-warning {
+      border-left-color: #f59e0b;
+      background: #fffbeb;
+    }
+
+    .error-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .error-level {
+      flex-shrink: 0;
+    }
+
+    .error-message {
+      font-size: 12px;
+      color: #374151;
+      word-break: break-word;
+    }
+
+    .error-location {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 11px;
+      color: #6b7280;
+      margin-bottom: 4px;
+    }
+
+    .link-btn {
+      background: none;
+      border: none;
+      padding: 0;
+      color: #667eea;
+      cursor: pointer;
+      font-size: 11px;
+      text-decoration: underline;
+    }
+
+    .link-btn:hover {
+      color: #4f46e5;
+    }
+
+    .error-value {
+      font-family: monospace;
+      font-size: 10px;
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+
+    .error-suggestion {
+      font-size: 11px;
+      color: #059669;
+      background: #f0fdf4;
+      padding: 6px 8px;
+      border-radius: 4px;
+      margin-top: 6px;
+    }
+
+    .validation-empty {
+      text-align: center;
+      padding: 16px;
+    }
+
+    .success-msg {
+      font-size: 13px;
+      color: #059669;
+      font-weight: 500;
+    }
   `],
 })
 export class SdrfRecommendPanelComponent implements OnChanges {
   @Input() table: SdrfTable | null = null;
+
+  /** Input to receive a message to send to the chat from external components */
+  @Input() set incomingChatMessage(message: string | null) {
+    if (message) {
+      this.receiveChatMessage(message);
+    }
+  }
+
   @Output() close = new EventEmitter<void>();
   @Output() openSettings = new EventEmitter<void>();
   @Output() applyRecommendation = new EventEmitter<ApplyRecommendationEvent>();
   @Output() batchApply = new EventEmitter<BatchApplyEvent>();
   @Output() previewRecommendation = new EventEmitter<SdrfRecommendation>();
+  @Output() applyFix = new EventEmitter<ApplyFixEvent>();
 
   // State
-  readonly activeTab = signal<ViewTab>('recommendations');
+  readonly activeTab = signal<ViewTab>('quality');
   readonly analyzing = signal(false);
   readonly error = signal<string | null>(null);
   readonly result = signal<RecommendationResult | null>(null);
@@ -1009,9 +2006,10 @@ export class SdrfRecommendPanelComponent implements OnChanges {
   readonly filterType = signal<RecommendationType | 'all'>('all');
 
   // Chat state
-  readonly chatMessages = signal<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  readonly chatMessages = signal<ChatMessage[]>([]);
   readonly chatInput = signal('');
   readonly chatLoading = signal(false);
+  readonly examplesLoaded = signal(false);
 
   // Advanced options
   readonly includeSampleData = signal(true);
@@ -1020,17 +2018,81 @@ export class SdrfRecommendPanelComponent implements OnChanges {
   readonly customInstructions = signal('');
   readonly showRawOutput = signal(false);
 
+  // Quality state
+  readonly qualityResult = signal<TableQualityResult | null>(null);
+  readonly qualityAnalyzing = signal(false);
+  readonly availableFixes = signal<AutoFix[]>([]);
+
+  // Pyodide validation state
+  readonly pyodideValidating = signal(false);
+  readonly pyodideErrors = signal<ValidationError[]>([]);
+  readonly pyodideHasValidated = signal(false);
+  readonly selectedTemplates = signal<string[]>(['default']);
+
   // Dismissed recommendations
   private dismissedIds = new Set<string>();
 
   // Services
   private recommendationService: RecommendationService;
   private settingsService: LlmSettingsService;
+  private qualityService: ColumnQualityService;
+  private cleaningService: DataCleaningService;
+  private examplesService: SdrfExamplesService;
+  private pyodideService: PyodideValidatorService;
 
   constructor() {
     this.recommendationService = recommendationService;
     this.settingsService = llmSettingsService;
+    this.qualityService = new ColumnQualityService();
+    this.cleaningService = dataCleaningService;
+    this.examplesService = sdrfExamplesService;
+    this.pyodideService = pyodideValidatorService;
+
+    // Load examples index in background
+    this.loadExamplesIndex();
   }
+
+  private async loadExamplesIndex(): Promise<void> {
+    try {
+      await this.examplesService.loadIndex();
+      this.examplesLoaded.set(true);
+    } catch (err) {
+      console.warn('Could not load SDRF examples index:', err);
+    }
+  }
+
+  // Quality computed
+  readonly qualityIssueCount = computed(() => {
+    const q = this.qualityResult();
+    if (!q) return 0;
+    return q.summary.columnsWithIssues + q.summary.effectivelyEmptyColumns;
+  });
+
+  readonly columnsWithIssues = computed(() => {
+    const q = this.qualityResult();
+    if (!q) return [];
+    return q.columns.filter(c => c.action !== 'keep');
+  });
+
+  readonly goodColumns = computed(() => {
+    const q = this.qualityResult();
+    if (!q) return [];
+    return q.columns.filter(c => c.action === 'keep');
+  });
+
+  readonly safeFixes = computed(() => {
+    return this.availableFixes().filter(f => f.isSafe);
+  });
+
+  // Pyodide computed
+  readonly pyodideState = computed(() => this.pyodideService.state());
+  readonly pyodideIsReady = computed(() => this.pyodideService.isReady());
+  readonly pyodideIsLoading = computed(() => this.pyodideService.isLoading());
+  readonly pyodideLoadProgress = computed(() => this.pyodideService.loadProgress());
+  readonly pyodideAvailableTemplates = computed(() => this.pyodideService.availableTemplates());
+  readonly pyodideErrorCount = computed(() => this.pyodideErrors().filter(e => e.level === 'error').length);
+  readonly pyodideWarningCount = computed(() => this.pyodideErrors().filter(e => e.level === 'warning').length);
+  readonly pyodideLastError = computed(() => this.pyodideService.lastError());
 
   // Computed
   readonly filteredRecommendations = computed(() => {
@@ -1090,13 +2152,32 @@ Key concepts:
 Output: JSON with recommendations array containing type, column, suggestedValue, confidence, reasoning...`;
   });
 
+  // Threshold for auto-analysis (skip for large tables to avoid browser freeze)
+  private readonly AUTO_ANALYZE_THRESHOLD = 1000;
+
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['table']) {
       this.result.set(null);
       this.error.set(null);
       this.streamContent.set('');
       this.dismissedIds.clear();
+
+      // Reset quality state
+      this.qualityResult.set(null);
+      this.availableFixes.set([]);
+
+      // Auto-analyze quality when table changes (but skip for large tables)
+      if (this.table && this.table.sampleCount <= this.AUTO_ANALYZE_THRESHOLD) {
+        this.analyzeQuality();
+      }
     }
+  }
+
+  /**
+   * Returns true if the table is too large for auto-analysis.
+   */
+  isLargeTable(): boolean {
+    return this.table ? this.table.sampleCount > this.AUTO_ANALYZE_THRESHOLD : false;
   }
 
   isConfigured(): boolean {
@@ -1167,6 +2248,7 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
       correct_value: 'Fix',
       ontology_suggestion: 'Ontology',
       consistency_fix: 'Consistency',
+      add_column: 'Add Column',
     };
     return labels[type];
   }
@@ -1174,6 +2256,30 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
   formatSamples(indices: number[]): string {
     if (indices.length <= 3) return indices.join(', ');
     return `${indices.slice(0, 3).join(', ')}...+${indices.length - 3}`;
+  }
+
+  /**
+   * Returns a label for how many samples a suggestion will affect.
+   * If the LLM only provided a few indices but no currentValue to match,
+   * indicate that it will apply to ALL samples.
+   */
+  getSuggestionSampleLabel(suggestion: ChatSuggestion): string {
+    const indices = suggestion.sampleIndices || [];
+    const noCurrentValue = !suggestion.currentValue || suggestion.currentValue.trim() === '';
+
+    // If few indices provided but no specific value to match, will apply to all
+    if (this.table && indices.length < 10 && noCurrentValue && this.table.sampleCount > 10) {
+      return `All ${this.table.sampleCount} samples`;
+    }
+
+    if (indices.length === 0) {
+      if (noCurrentValue && this.table) {
+        return `All ${this.table.sampleCount} samples`;
+      }
+      return 'Matching samples';
+    }
+
+    return `${indices.length} sample${indices.length > 1 ? 's' : ''}`;
   }
 
   onApplyClick(rec: SdrfRecommendation): void {
@@ -1203,6 +2309,188 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
     this.batchApply.emit({ recommendations: toApply });
   }
 
+  // Quality methods
+  analyzeQuality(): void {
+    if (!this.table || this.qualityAnalyzing()) return;
+
+    this.qualityAnalyzing.set(true);
+
+    // Run quality analysis (synchronous but we use setTimeout to allow UI update)
+    setTimeout(() => {
+      try {
+        const result = this.qualityService.analyzeTable(this.table!);
+        this.qualityResult.set(result);
+
+        // Detect available fixes
+        const fixes = this.cleaningService.detectAvailableFixes(this.table!, result);
+        this.availableFixes.set(fixes);
+      } finally {
+        this.qualityAnalyzing.set(false);
+      }
+    }, 10);
+  }
+
+  applyFixAction(fix: AutoFix): void {
+    if (!this.table) return;
+
+    const { table: newTable, result } = this.cleaningService.applyFix(this.table, fix);
+
+    if (result.success) {
+      // Emit the fix event with new table
+      this.applyFix.emit({ table: newTable, fix, result });
+
+      // Remove the applied fix from the list
+      this.availableFixes.update(fixes => fixes.filter(f => f.id !== fix.id));
+
+      // Re-analyze quality with the new table
+      // Note: The parent component should update the table input
+    }
+  }
+
+  applyAllSafeFixes(): void {
+    if (!this.table) return;
+
+    const safeFixes = this.safeFixes();
+    if (safeFixes.length === 0) return;
+
+    const { table: newTable, results } = this.cleaningService.applyFixes(this.table, safeFixes);
+
+    const successCount = results.filter(r => r.success).length;
+    if (successCount > 0) {
+      // Emit fix event for the combined result
+      this.applyFix.emit({
+        table: newTable,
+        fix: safeFixes[0], // First fix for reference
+        result: {
+          success: true,
+          changesCount: results.reduce((sum, r) => sum + r.changesCount, 0),
+        }
+      });
+
+      // Clear applied fixes
+      this.availableFixes.update(fixes =>
+        fixes.filter(f => !safeFixes.some(sf => sf.id === f.id))
+      );
+    }
+  }
+
+  // Pyodide validation methods
+  async initPyodide(): Promise<void> {
+    try {
+      await this.pyodideService.initialize();
+      // Auto-detect templates based on table content
+      if (this.table) {
+        const tsvContent = sdrfExport.exportToTsv(this.table);
+        const detected = this.pyodideService.detectTemplates(tsvContent);
+        this.selectedTemplates.set(detected);
+      }
+    } catch (err) {
+      console.error('Failed to initialize Pyodide:', err);
+    }
+  }
+
+  async runPyodideValidation(): Promise<void> {
+    if (!this.table || this.pyodideValidating()) return;
+
+    // Initialize Pyodide if not ready
+    if (!this.pyodideIsReady()) {
+      await this.initPyodide();
+    }
+
+    this.pyodideValidating.set(true);
+    this.pyodideErrors.set([]);
+
+    try {
+      // Convert table to TSV
+      const tsvContent = sdrfExport.exportToTsv(this.table);
+
+      // Debug: Log the column state for any sdrf template columns
+      const templateCol = this.table.columns.find(c => c.name.includes('sdrf template'));
+      if (templateCol) {
+        console.log(`[RecPanel Validate] Template column state: value="${templateCol.value}", modifiers=${JSON.stringify(templateCol.modifiers)}`);
+        // Log first few lines of TSV to see actual exported values
+        const lines = tsvContent.split('\n').slice(0, 3);
+        console.log(`[RecPanel Validate] First 3 TSV lines:`, lines);
+      }
+
+      // Run validation
+      const errors = await this.pyodideService.validate(
+        tsvContent,
+        this.selectedTemplates(),
+        { skipOntology: true } // Skip ontology for speed
+      );
+
+      this.pyodideErrors.set(errors);
+    } catch (err) {
+      console.error('Pyodide validation failed:', err);
+      this.pyodideErrors.set([{
+        message: `Validation failed: ${err instanceof Error ? err.message : String(err)}`,
+        row: -1,
+        column: null,
+        value: null,
+        level: 'error',
+        suggestion: null
+      }]);
+    } finally {
+      this.pyodideValidating.set(false);
+      this.pyodideHasValidated.set(true);
+    }
+  }
+
+  toggleTemplate(template: string): void {
+    const current = this.selectedTemplates();
+    if (current.includes(template)) {
+      this.selectedTemplates.set(current.filter(t => t !== template));
+    } else {
+      this.selectedTemplates.set([...current, template]);
+    }
+  }
+
+  jumpToValidationError(error: ValidationError): void {
+    if (error.row >= 0 && error.column) {
+      // Emit event to parent to jump to cell
+      // The row is 0-based from Python, but UI is 1-based
+      const columnIndex = this.findColumnIndex(error.column);
+      if (columnIndex >= 0) {
+        // Create a recommendation to trigger preview
+        const rec: SdrfRecommendation = {
+          id: 'validation-' + Date.now(),
+          type: 'fill_value',
+          column: error.column,
+          columnIndex,
+          sampleIndices: [error.row + 1], // Convert to 1-based
+          currentValue: error.value || '',
+          suggestedValue: error.suggestion || '',
+          confidence: 'high',
+          reasoning: error.message,
+          applied: false
+        };
+        this.previewRecommendation.emit(rec);
+      }
+    }
+  }
+
+  /**
+   * Builds validation context for AI prompts.
+   */
+  buildValidationContext(): string {
+    const errors = this.pyodideErrors();
+    if (errors.length === 0) return '';
+
+    const errorLines = errors.slice(0, 15).map(e => {
+      const location = e.row >= 0 ? `Row ${e.row + 1}` : 'General';
+      const col = e.column ? `, ${e.column}` : '';
+      const val = e.value ? ` (value: "${e.value}")` : '';
+      const sug = e.suggestion ? ` Fix: ${e.suggestion}` : '';
+      return `- [${e.level.toUpperCase()}] ${location}${col}${val}: ${e.message}${sug}`;
+    });
+
+    return `\nSDRF-PIPELINES VALIDATION (${this.selectedTemplates().join(', ')}):
+${errors.length} issues found (${this.pyodideErrorCount()} errors, ${this.pyodideWarningCount()} warnings)
+${errorLines.join('\n')}
+${errors.length > 15 ? `...and ${errors.length - 15} more` : ''}`;
+  }
+
   // Chat methods
   onChatInput(event: Event): void {
     this.chatInput.set((event.target as HTMLTextAreaElement).value);
@@ -1217,26 +2505,570 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
 
   async sendChatMessage(preset?: string): Promise<void> {
     const message = preset || this.chatInput().trim();
-    if (!message || this.chatLoading()) return;
+    if (!message || this.chatLoading() || !this.table) return;
 
     this.chatInput.set('');
-    this.chatMessages.update(msgs => [...msgs, { role: 'user', content: message }]);
+    this.chatMessages.update(msgs => [...msgs, { role: 'user', content: message, timestamp: new Date() }]);
     this.chatLoading.set(true);
 
     try {
-      // For now, add a placeholder response
-      // In a full implementation, this would call the LLM with chat context
-      const response = `I understand you want to: "${message}". This feature will integrate with the analysis to provide contextual responses based on your SDRF data.`;
+      // Build context about the current table state
+      const tableContext = this.buildTableContext();
+      const qualityContext = this.buildQualityContext();
+      const examplesContext = this.buildExamplesContext();
+      const validationContext = this.buildValidationContext();
 
-      this.chatMessages.update(msgs => [...msgs, { role: 'assistant', content: response }]);
-    } catch (err) {
+      // Build the enhanced system prompt (include validation errors in quality context)
+      const fullQualityContext = qualityContext + validationContext;
+      const systemPrompt = promptService.buildChatSystemPrompt(
+        tableContext,
+        fullQualityContext,
+        examplesContext
+      );
+
+      // Build chat messages for the LLM
+      const provider = await this.recommendationService.getActiveProvider();
+      const llmMessages = [
+        { role: 'system' as const, content: systemPrompt },
+        // Add previous chat messages for context (text only, without suggestions)
+        ...this.chatMessages().slice(-6).map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content
+        })),
+        { role: 'user' as const, content: message }
+      ];
+
+      // Call the LLM
+      const response = await provider.complete(llmMessages);
+      const responseContent = response.content || '';
+
+      // Parse the response for text and suggestions
+      const parsed = this.parseChatResponse(responseContent);
+
+      // Add the message with suggestions
       this.chatMessages.update(msgs => [...msgs, {
         role: 'assistant',
-        content: `Error: ${err instanceof Error ? err.message : 'Failed to get response'}`
+        content: parsed.text,
+        suggestions: parsed.suggestions,
+        timestamp: new Date()
+      }]);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to get response';
+      this.chatMessages.update(msgs => [...msgs, {
+        role: 'assistant',
+        content: `Error: ${errorMsg}. Make sure your AI provider is configured correctly.`,
+        timestamp: new Date()
       }]);
     } finally {
       this.chatLoading.set(false);
     }
+  }
+
+  /**
+   * Receive a chat message from an external component (e.g., validation panel)
+   * Switches to chat tab and sends the message
+   */
+  receiveChatMessage(message: string): void {
+    // Switch to chat tab
+    this.activeTab.set('chat');
+
+    // Send the message after a small delay to ensure UI updates
+    setTimeout(() => {
+      this.sendChatMessage(message);
+    }, 100);
+  }
+
+  /**
+   * Parses the LLM response to extract text and suggestions.
+   * Handles multiple response formats:
+   * 1. Proper JSON with text and suggestions
+   * 2. JSON embedded in markdown code blocks
+   * 3. Mixed content with JSON at the end
+   * 4. Plain text with pattern-based extraction fallback
+   */
+  private parseChatResponse(content: string): ParsedChatResponse {
+    // Strategy 1: Try to parse as structured JSON
+    const jsonResult = this.tryParseJsonResponse(content);
+    if (jsonResult) {
+      return jsonResult;
+    }
+
+    // Strategy 2: Extract suggestions from plain text using patterns
+    const patternResult = this.extractSuggestionsFromText(content);
+    return patternResult;
+  }
+
+  /**
+   * Tries to parse the response as JSON in various formats.
+   */
+  private tryParseJsonResponse(content: string): ParsedChatResponse | null {
+    // Try multiple JSON extraction strategies
+    const jsonCandidates: string[] = [];
+
+    // Strategy 1: Extract from markdown code blocks
+    const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (codeBlockMatch) {
+      jsonCandidates.push(codeBlockMatch[1].trim());
+    }
+
+    // Strategy 2: Find raw JSON object (handles no code blocks)
+    const jsonStart = content.indexOf('{');
+    const jsonEnd = content.lastIndexOf('}');
+    if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+      jsonCandidates.push(content.substring(jsonStart, jsonEnd + 1));
+    }
+
+    // Strategy 3: The entire content might be JSON
+    jsonCandidates.push(content.trim());
+
+    for (const jsonStr of jsonCandidates) {
+      try {
+        const parsed = JSON.parse(jsonStr);
+
+        if (parsed && typeof parsed.text === 'string') {
+          const suggestions = this.extractSuggestionsFromParsedJson(parsed);
+          return { text: parsed.text, suggestions };
+        }
+
+        // Handle alternative structures (e.g., { message: ..., suggestions: ... })
+        if (parsed && typeof parsed.message === 'string') {
+          const suggestions = this.extractSuggestionsFromParsedJson(parsed);
+          return { text: parsed.message, suggestions };
+        }
+
+        // Handle case where response is just { suggestions: [...] }
+        if (parsed && Array.isArray(parsed.suggestions) && parsed.suggestions.length > 0) {
+          const suggestions = this.extractSuggestionsFromParsedJson(parsed);
+          return { text: 'Here are my suggestions:', suggestions };
+        }
+      } catch (e) {
+        // This candidate didn't parse, try next
+        continue;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Extracts ChatSuggestion array from parsed JSON.
+   */
+  private extractSuggestionsFromParsedJson(parsed: any): ChatSuggestion[] {
+    const suggestions: ChatSuggestion[] = [];
+
+    if (!Array.isArray(parsed.suggestions)) {
+      return suggestions;
+    }
+
+    for (const s of parsed.suggestions) {
+      if (!s || typeof s !== 'object') continue;
+
+      // Require at least type and column (or description for minimal suggestions)
+      if (typeof s.type !== 'string' && typeof s.description !== 'string') continue;
+
+      const suggestion: ChatSuggestion = {
+        id: generateSuggestionId(),
+        type: s.type || 'set_value',
+        column: s.column || s.columnName || '',
+        sampleIndices: this.parseSampleIndices(s.sampleIndices || s.samples || s.rows),
+        currentValue: s.currentValue || s.oldValue || s.from,
+        suggestedValue: s.suggestedValue || s.newValue || s.value || s.to,
+        newColumnName: s.newColumnName,
+        description: s.description || s.reason || `${s.type || 'Change'} for ${s.column || 'column'}`,
+        confidence: this.normalizeConfidence(s.confidence),
+        applied: false,
+        dismissed: false,
+      };
+
+      // Only add if we have enough info to act on it
+      if (suggestion.column || suggestion.description) {
+        suggestions.push(suggestion);
+      }
+    }
+
+    return suggestions;
+  }
+
+  /**
+   * Parses sample indices from various formats.
+   */
+  private parseSampleIndices(indices: any): number[] {
+    if (!indices) return [];
+    if (Array.isArray(indices)) {
+      return indices.filter(i => typeof i === 'number' || typeof i === 'string')
+        .map(i => typeof i === 'string' ? parseInt(i, 10) : i)
+        .filter(i => !isNaN(i));
+    }
+    if (typeof indices === 'string') {
+      // Handle "1-5" or "1,2,3" or "all"
+      if (indices.toLowerCase() === 'all') {
+        return this.table ? Array.from({ length: this.table.sampleCount }, (_, i) => i + 1) : [];
+      }
+      const nums: number[] = [];
+      for (const part of indices.split(',')) {
+        const trimmed = part.trim();
+        if (trimmed.includes('-')) {
+          const [start, end] = trimmed.split('-').map(Number);
+          if (!isNaN(start) && !isNaN(end)) {
+            for (let i = start; i <= end; i++) nums.push(i);
+          }
+        } else {
+          const num = parseInt(trimmed, 10);
+          if (!isNaN(num)) nums.push(num);
+        }
+      }
+      return nums;
+    }
+    return [];
+  }
+
+  /**
+   * Normalizes confidence values to expected format.
+   */
+  private normalizeConfidence(conf: any): RecommendationConfidence {
+    if (!conf) return 'medium';
+    const c = String(conf).toLowerCase();
+    if (c === 'high' || c === 'h' || c === '3') return 'high';
+    if (c === 'low' || c === 'l' || c === '1') return 'low';
+    return 'medium';
+  }
+
+  /**
+   * Extracts suggestions from plain text using pattern matching.
+   * This is a fallback when the LLM doesn't return JSON.
+   */
+  private extractSuggestionsFromText(content: string): ParsedChatResponse {
+    const suggestions: ChatSuggestion[] = [];
+    const lines = content.split('\n');
+
+    // Pattern 1: "change X to Y" or "replace X with Y"
+    const changePatterns = [
+      /(?:change|replace|update|set|fix)\s+["']?([^"']+)["']?\s+(?:to|with|as|→)\s+["']?([^"'.,]+)["']?/gi,
+      /["']([^"']+)["']\s*(?:should be|→|->|==>)\s*["']?([^"'.,]+)["']?/gi,
+    ];
+
+    // Pattern 2: Column-specific changes like "in disease column, use 'normal'"
+    const columnPatterns = [
+      /(?:in|for)\s+(?:the\s+)?["']?([^"']+)["']?\s+column[,\s]+(?:use|set|change to)\s+["']?([^"'.,]+)["']?/gi,
+      /(?:column|field)\s+["']?([^"']+)["']?[:\s]+["']?([^"'.,]+)["']?\s+(?:instead|recommended)/gi,
+    ];
+
+    // Pattern 3: Value recommendations like "'control' → 'normal'"
+    const arrowPattern = /["']([^"']+)["']\s*(?:→|->|==>|should be)\s*["']([^"']+)["']/gi;
+
+    // Detect column names in the text for association
+    const columnNames = this.table?.columns.map(c => c.name.toLowerCase()) || [];
+
+    // Try to extract suggestions from patterns
+    for (const pattern of [...changePatterns, ...columnPatterns, arrowPattern]) {
+      let match;
+      while ((match = pattern.exec(content)) !== null) {
+        const [, from, to] = match;
+        if (from && to && from.trim() !== to.trim()) {
+          // Try to find which column this applies to
+          let column = '';
+
+          // Check if 'from' value is found in any column
+          if (this.table) {
+            for (const col of this.table.columns) {
+              const colNameLower = col.name.toLowerCase();
+              // Check if the column name is mentioned near this match
+              const contextStart = Math.max(0, match.index - 50);
+              const contextEnd = Math.min(content.length, match.index + match[0].length + 50);
+              const context = content.substring(contextStart, contextEnd).toLowerCase();
+
+              if (context.includes(colNameLower) || context.includes(col.name)) {
+                column = col.name;
+                break;
+              }
+
+              // Check if column contains the 'from' value
+              const fromLower = from.toLowerCase().trim();
+              const hasValue = col.value?.toLowerCase().includes(fromLower) ||
+                col.modifiers.some(m => m.value?.toLowerCase().includes(fromLower));
+              if (hasValue) {
+                column = col.name;
+                break;
+              }
+            }
+          }
+
+          // Only create suggestion if we found a column or have a clear recommendation
+          if (column || from.toLowerCase().includes('control') || from.toLowerCase().includes('na')) {
+            // If no column found but it's a common fix, guess the column
+            if (!column && from.toLowerCase().includes('control')) {
+              column = 'characteristics[disease]';
+            }
+
+            suggestions.push({
+              id: generateSuggestionId(),
+              type: 'set_value',
+              column: column,
+              sampleIndices: [], // Will need manual specification or apply to all
+              currentValue: from.trim(),
+              suggestedValue: to.trim(),
+              description: `Change "${from.trim()}" to "${to.trim()}"${column ? ` in ${column}` : ''}`,
+              confidence: 'medium',
+              applied: false,
+              dismissed: false,
+            });
+          }
+        }
+      }
+    }
+
+    // Pattern 4: Look for bullet points with recommendations
+    const bulletPattern = /^[\s]*[-•*]\s*(.+)$/gm;
+    let bulletMatch;
+    while ((bulletMatch = bulletPattern.exec(content)) !== null) {
+      const bulletText = bulletMatch[1];
+      // Check if this bullet contains actionable content
+      for (const pattern of changePatterns) {
+        pattern.lastIndex = 0; // Reset regex
+        const innerMatch = pattern.exec(bulletText);
+        if (innerMatch) {
+          const [, from, to] = innerMatch;
+          if (from && to && !suggestions.some(s => s.currentValue === from.trim() && s.suggestedValue === to.trim())) {
+            suggestions.push({
+              id: generateSuggestionId(),
+              type: 'set_value',
+              column: '',
+              sampleIndices: [],
+              currentValue: from.trim(),
+              suggestedValue: to.trim(),
+              description: bulletText.trim(),
+              confidence: 'medium',
+              applied: false,
+              dismissed: false,
+            });
+          }
+        }
+      }
+    }
+
+    // Deduplicate suggestions
+    const uniqueSuggestions = this.deduplicateSuggestions(suggestions);
+
+    return { text: content, suggestions: uniqueSuggestions };
+  }
+
+  /**
+   * Removes duplicate suggestions.
+   */
+  private deduplicateSuggestions(suggestions: ChatSuggestion[]): ChatSuggestion[] {
+    const seen = new Set<string>();
+    return suggestions.filter(s => {
+      const key = `${s.column}:${s.currentValue}:${s.suggestedValue}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  /**
+   * Applies a chat suggestion to the table.
+   */
+  applyChatSuggestion(suggestion: ChatSuggestion, msg: ChatMessage): void {
+    if (!this.table || suggestion.applied) return;
+
+    console.log(`[ApplyChatSuggestion] Applying: column="${suggestion.column}", currentValue="${suggestion.currentValue}", suggestedValue="${suggestion.suggestedValue}", sampleIndices=${JSON.stringify(suggestion.sampleIndices)}`);
+
+    // Mark as applied
+    suggestion.applied = true;
+
+    // Determine sample indices to apply to
+    let sampleIndices = suggestion.sampleIndices || [];
+
+    // If the LLM only provided a few sample indices but the table has many more samples,
+    // and there's no specific currentValue to match against, apply to ALL samples.
+    // This handles cases like "add a placeholder value to all samples" where the LLM
+    // only saw a few rows in the context.
+    const hasLimitedIndices = sampleIndices.length > 0 && sampleIndices.length < 10;
+    const tableHasManyMoreSamples = this.table.sampleCount > sampleIndices.length * 10;
+    const noCurrentValueToMatch = !suggestion.currentValue || suggestion.currentValue.trim() === '';
+
+    if ((sampleIndices.length === 0 || (hasLimitedIndices && tableHasManyMoreSamples)) && noCurrentValueToMatch) {
+      // Apply to ALL samples - create array of 1-based indices
+      sampleIndices = Array.from({ length: this.table.sampleCount }, (_, i) => i + 1);
+      console.log(`[ApplyChatSuggestion] Expanded to ALL ${this.table.sampleCount} samples (LLM only suggested ${suggestion.sampleIndices?.length || 0})`);
+    }
+
+    // Handle add_column type - need to create the column first
+    if (suggestion.type === 'add_column' && suggestion.column) {
+      console.log(`[ApplyChatSuggestion] Add column: "${suggestion.column}" with value "${suggestion.suggestedValue}"`);
+      // Emit as a special recommendation type that the parent can handle
+      const recommendation: SdrfRecommendation = {
+        id: suggestion.id,
+        type: 'add_column',
+        column: suggestion.column,
+        columnIndex: -1, // New column
+        sampleIndices: sampleIndices,
+        currentValue: undefined,
+        suggestedValue: suggestion.suggestedValue || 'not available',
+        confidence: suggestion.confidence,
+        reasoning: suggestion.description,
+        applied: true,
+      };
+      console.log(`[ApplyChatSuggestion] Emitting add_column recommendation:`, recommendation);
+      this.applyRecommendation.emit({ recommendation });
+    }
+    // Handle set_value type
+    else if (suggestion.type === 'set_value' && suggestion.suggestedValue !== undefined) {
+      const columnIndex = this.findColumnIndex(suggestion.column);
+      console.log(`[ApplyChatSuggestion] Column index for "${suggestion.column}": ${columnIndex}`);
+      if (columnIndex !== -1) {
+        const recommendation: SdrfRecommendation = {
+          id: suggestion.id,
+          type: 'fill_value',
+          column: suggestion.column,
+          columnIndex,
+          sampleIndices: sampleIndices,
+          currentValue: suggestion.currentValue,
+          suggestedValue: suggestion.suggestedValue,
+          confidence: suggestion.confidence,
+          reasoning: suggestion.description,
+          applied: true,
+        };
+        console.log(`[ApplyChatSuggestion] Emitting recommendation:`, recommendation);
+        this.applyRecommendation.emit({ recommendation });
+      } else {
+        console.warn(`[ApplyChatSuggestion] Column "${suggestion.column}" not found in table`);
+      }
+    } else {
+      console.warn(`[ApplyChatSuggestion] Skipping: type="${suggestion.type}", suggestedValue="${suggestion.suggestedValue}"`);
+    }
+
+    // Trigger UI update
+    this.chatMessages.update(msgs => [...msgs]);
+  }
+
+  /**
+   * Dismisses a chat suggestion.
+   */
+  dismissChatSuggestion(suggestion: ChatSuggestion, msg: ChatMessage): void {
+    suggestion.dismissed = true;
+    // Trigger UI update
+    this.chatMessages.update(msgs => [...msgs]);
+  }
+
+  /**
+   * Finds the column index by name.
+   */
+  private findColumnIndex(columnName: string): number {
+    if (!this.table) return -1;
+    const normalizedName = columnName.toLowerCase().trim();
+    return this.table.columns.findIndex(
+      c => c.name.toLowerCase().trim() === normalizedName
+    );
+  }
+
+  private buildTableContext(): string {
+    if (!this.table) return 'No table loaded';
+
+    const columns = this.table.columns.map(c => c.name).join(', ');
+    return `- ${this.table.sampleCount} samples, ${this.table.columns.length} columns
+- Columns: ${columns.substring(0, 500)}${columns.length > 500 ? '...' : ''}`;
+  }
+
+  private buildQualityContext(): string {
+    const q = this.qualityResult();
+    if (!q) return 'Quality analysis not yet performed';
+
+    const issues = this.columnsWithIssues();
+    if (issues.length === 0) return 'No quality issues detected';
+
+    return `Found ${issues.length} columns with issues:
+${issues.slice(0, 5).map(i => `- ${i.name}: ${i.reason}`).join('\n')}
+${issues.length > 5 ? `...and ${issues.length - 5} more` : ''}`;
+  }
+
+  /**
+   * Builds example context from annotated datasets.
+   */
+  private buildExamplesContext(): string {
+    if (!this.examplesLoaded() || !this.table) return '';
+
+    // Detect organism for more relevant examples
+    const organism = this.detectOrganism();
+
+    // Get columns that could benefit from examples
+    const relevantColumns = [
+      'characteristics[disease]',
+      'characteristics[organism part]',
+      'characteristics[developmental stage]',
+      'characteristics[sex]',
+      'characteristics[cell line]',
+      'characteristics[cell type]',
+    ];
+
+    // Filter to columns that exist in the table
+    const tableColumnNames = this.table.columns.map(c => c.name.toLowerCase());
+    const columnsToShow = relevantColumns.filter(col =>
+      tableColumnNames.includes(col)
+    );
+
+    if (columnsToShow.length === 0) return '';
+
+    return this.examplesService.getContextForColumns(columnsToShow, organism, 5);
+  }
+
+  /**
+   * Detects the organism from the table data.
+   */
+  private detectOrganism(): string | undefined {
+    if (!this.table) return undefined;
+
+    const orgCol = this.table.columns.find(
+      c => c.name.toLowerCase() === 'characteristics[organism]'
+    );
+
+    if (!orgCol) return undefined;
+
+    // Get the most common organism value from the column
+    // The column's default value is the most common value
+    const defaultVal = orgCol.value?.toLowerCase().trim();
+    if (defaultVal && defaultVal !== 'not available' && defaultVal !== 'not applicable') {
+      return defaultVal;
+    }
+
+    // If default is not useful, check modifiers for the most common override
+    const values: Record<string, number> = {};
+    for (const modifier of orgCol.modifiers) {
+      const val = modifier.value?.toLowerCase().trim();
+      if (val && val !== 'not available' && val !== 'not applicable') {
+        // Count the number of samples in this modifier's range
+        const sampleCount = this.countSamplesInRange(modifier.samples);
+        values[val] = (values[val] || 0) + sampleCount;
+      }
+    }
+
+    const sorted = Object.entries(values).sort((a, b) => b[1] - a[1]);
+    return sorted[0]?.[0];
+  }
+
+  /**
+   * Counts the number of samples in a range string like "1-3,5,7-10".
+   */
+  private countSamplesInRange(rangeString: string): number {
+    let count = 0;
+    const parts = rangeString.split(',');
+
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (trimmed.includes('-')) {
+        const [start, end] = trimmed.split('-').map(Number);
+        if (!isNaN(start) && !isNaN(end)) {
+          count += end - start + 1;
+        }
+      } else {
+        const num = Number(trimmed);
+        if (!isNaN(num)) {
+          count += 1;
+        }
+      }
+    }
+
+    return count;
   }
 
   // Advanced options

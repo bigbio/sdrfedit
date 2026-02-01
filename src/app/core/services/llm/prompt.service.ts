@@ -8,6 +8,20 @@
 
 import { LlmMessage, AnalysisFocusArea, SdrfAnalysisContext, ColumnContext, AnalysisIssue } from '../../models/llm';
 import { ContextBuilderService } from './context-builder.service';
+import { ColumnQuality } from '../column-quality.service';
+
+/**
+ * Detected sample type for template selection.
+ */
+export type SampleType = 'human' | 'cell-line' | 'vertebrate' | 'other';
+
+/**
+ * Quality issues to include in prompts.
+ */
+export interface QualityIssueForPrompt {
+  column: string;
+  reason: string;
+}
 
 /**
  * System prompt for SDRF analysis.
@@ -15,43 +29,54 @@ import { ContextBuilderService } from './context-builder.service';
  */
 const SDRF_SYSTEM_PROMPT = `You are an expert in proteomics data annotation, specifically the SDRF (Sample and Data Relationship Format) specification used in the PRIDE database and proteomics community.
 
-## SDRF Format Overview
+## SDRF Format Rules
 
-SDRF files are tab-separated tables describing experimental samples and their relationship to data files. Key concepts:
+### Required Columns (ALL experiments):
+- source name: Unique sample identifier
+- characteristics[organism]: NCBI Taxonomy lowercase (e.g., "homo sapiens", "mus musculus")
+- characteristics[organism part]: UBERON term lowercase (e.g., "liver", "blood plasma")
+- characteristics[biological replicate]: Integer starting from 1 per condition
+- assay name: Unique MS run identifier
+- comment[instrument]: MS ontology term (e.g., "Q Exactive HF")
+- comment[data file]: Raw file name
+- comment[label]: Label type (e.g., "label free sample", "TMT126")
+- technology type: Usually "proteomic profiling by mass spectrometry"
 
-1. **Reserved Values**: The following special values are allowed in SDRF:
-   - "not available" - Information exists but is not known/provided
-   - "not applicable" - The field does not apply to this sample
-   - "anonymized" - Information hidden for privacy
-   - "pooled" - Sample is a pool of multiple sources
+### Reserved Words (MUST use instead of empty cells):
+- "not available": Value unknown or not recorded
+- "not applicable": Concept doesn't apply (e.g., age for synthetic sample)
+- "anonymized": Value redacted for privacy
+- "pooled": Sample is mixture of multiple sources
 
-2. **Column Types**:
-   - \`source name\`: Unique identifier for biological samples
-   - \`characteristics[...]\`: Sample properties (organism, tissue, etc.)
-   - \`factor value[...]\`: Experimental variables being studied
-   - \`comment[...]\`: Additional metadata
-   - \`assay name\`: Unique identifier for data acquisition runs
+### Ontology Requirements:
+- characteristics[organism]: NCBI Taxonomy
+- characteristics[organism part]: UBERON (for mammals), BTO
+- characteristics[cell type]: Cell Ontology (CL)
+- characteristics[disease]: MONDO (preferred), EFO, or DOID
+- characteristics[cell line]: Free text (e.g., "HeLa", "HEK293")
+- comment[instrument]: PSI-MS ontology
 
-3. **Ontology Requirements**: Many columns require ontology-controlled terms:
-   - \`characteristics[organism]\`: NCBI Taxonomy (e.g., "homo sapiens", "mus musculus")
-   - \`characteristics[organism part]\`: UBERON or BTO (e.g., "liver", "brain")
-   - \`characteristics[cell type]\`: CL or BTO (e.g., "hepatocyte", "T cell")
-   - \`characteristics[disease]\`: EFO, MONDO, or DOID
-   - \`comment[instrument]\`: MS ontology (e.g., "Q Exactive HF", "Orbitrap Exploris")
+### Common Mistakes to AVOID:
+- ❌ "control" for healthy samples → ✅ Use "normal"
+- ❌ "characteristics[tissue]" → ✅ Use "characteristics[organism part]"
+- ❌ Empty cells → ✅ Use reserved words
+- ❌ "Characteristics[...]" → ✅ Use "characteristics[...]" (lowercase)
+- ❌ "blood" → ✅ Use "blood plasma" or specific component
+- ❌ "NA", "N/A", "Unknown" → ✅ Use "not available"
+- ❌ Uppercase values → ✅ Use lowercase (e.g., "homo sapiens" not "Homo Sapiens")
 
-4. **Consistency**: Values should be consistent across samples (e.g., same spelling, capitalization).
+### Age Format (for human samples):
+- Exact: 25Y, 6M, 30D (years, months, days)
+- Range: 40Y-50Y
+- Greater/Less: >18Y, <65Y
 
-## Your Task
-
-Analyze the SDRF data provided and suggest improvements. Focus on:
-1. Filling "not available" or empty values when the information can be inferred
-2. Suggesting proper ontology terms for columns that require them
-3. Identifying and fixing inconsistencies (similar values with different spellings)
-4. Ensuring data quality and completeness
+### Disease Column Rules:
+- Use "normal" for healthy samples (NOT "control" or "healthy")
+- Use MONDO terms for diseases (e.g., "breast carcinoma", "diabetes mellitus")
 
 ## Output Format
 
-You MUST respond with a valid JSON object containing recommendations. The format is:
+You MUST respond with a valid JSON object containing recommendations:
 
 \`\`\`json
 {
@@ -64,21 +89,91 @@ You MUST respond with a valid JSON object containing recommendations. The format
       "currentValue": "current value or empty",
       "suggestedValue": "suggested value",
       "confidence": "high" | "medium" | "low",
-      "reasoning": "Brief explanation of why this change is recommended"
+      "reasoning": "Brief explanation"
     }
   ],
-  "summary": "Brief overall summary of the analysis"
+  "summary": "Brief overall summary"
 }
 \`\`\`
 
 ## Important Guidelines
 
 1. Only suggest changes you are confident about
-2. For ontology terms, use the common label (e.g., "homo sapiens" not "NCBITaxon:9606")
+2. For ontology terms, use the common label in lowercase
 3. Be conservative - don't guess at values you can't reasonably infer
-4. Consider the context of other values in the column when making suggestions
-5. If a column already has mostly valid values, use those as a guide for filling missing ones
-6. For consistency fixes, prefer the most common or most standard form`;
+4. For consistency fixes, prefer the most common or most standard form
+5. Always replace "control" with "normal" for disease columns
+6. Standardize null values to "not available" or "not applicable"`;
+
+/**
+ * Human-specific prompt additions
+ */
+const HUMAN_TEMPLATE_PROMPT = `
+
+## Human Sample Requirements
+
+REQUIRED columns for human data:
+1. characteristics[disease] - Use MONDO terms. For healthy: "normal" (NEVER "control")
+2. characteristics[age] - Format: 25Y, 6M, 30D, or ranges like 40Y-50Y, or ">18Y"
+3. characteristics[sex] - "male" or "female" (lowercase)
+
+RECOMMENDED columns:
+- characteristics[individual] - Pseudonymized patient ID (e.g., "patient_001")
+- characteristics[ancestry category] - "African", "European", "East Asian", "South Asian", "American"
+
+For CLINICAL studies also consider:
+- characteristics[tumor stage] - TNM format: "T1N0M0", "pT2pN1M0"
+- characteristics[treatment] - Therapy type from NCIT
+- characteristics[compound] - Drug name if applicable
+- characteristics[dose] - Format: "100 nanomolar", "10 micromolar"`;
+
+/**
+ * Cell line-specific prompt additions
+ */
+const CELL_LINE_TEMPLATE_PROMPT = `
+
+## Cell Line Requirements
+
+REQUIRED:
+- characteristics[cell line] - Cell line name (e.g., "HeLa", "HEK293", "MCF-7")
+
+For organism part: Use tissue of origin (e.g., "cervix" for HeLa) or "not applicable"
+For disease: Use disease the cell line models or "normal" for non-disease lines
+For sex: Use "female" for HeLa, "male" for HEK293, etc. based on cell line origin`;
+
+/**
+ * Vertebrate (non-human) prompt additions
+ */
+const VERTEBRATE_TEMPLATE_PROMPT = `
+
+## Vertebrate (Non-Human) Sample Requirements
+
+REQUIRED:
+- characteristics[disease] - MONDO term or "normal" for healthy animals
+
+RECOMMENDED:
+- characteristics[strain/breed] - e.g., "C57BL/6", "Sprague-Dawley", "BALB/c"
+- characteristics[developmental stage] - e.g., "adult", "embryonic day 14", "8 weeks"
+- characteristics[sex] - "male", "female", or "hermaphrodite"
+
+Common organisms:
+- Mouse: "mus musculus"
+- Rat: "rattus norvegicus"
+- Zebrafish: "danio rerio"`;
+
+/**
+ * Quality issues prompt section
+ */
+function buildQualityIssuesPrompt(issues: Array<{column: string; reason: string}>): string {
+  if (issues.length === 0) return '';
+
+  return `
+
+## Quality Issues Found in This File:
+${issues.map(i => `- ${i.column}: ${i.reason}`).join('\n')}
+
+Please address these issues in your recommendations.`;
+}
 
 /**
  * Prompt Service
@@ -94,17 +189,40 @@ export class PromptService {
 
   /**
    * Builds the complete message array for an analysis request.
+   * Automatically detects sample type and includes relevant template prompts.
    */
   buildAnalysisMessages(
     context: SdrfAnalysisContext,
-    additionalInstructions?: string
+    additionalInstructions?: string,
+    qualityIssues?: QualityIssueForPrompt[]
   ): LlmMessage[] {
     const messages: LlmMessage[] = [];
 
-    // System prompt
+    // Detect sample types from the context
+    const sampleTypes = this.detectSampleTypes(context);
+
+    // Build system prompt with template-specific additions
+    let systemPrompt = SDRF_SYSTEM_PROMPT;
+
+    // Add template-specific rules based on detected sample types
+    if (sampleTypes.includes('human')) {
+      systemPrompt += HUMAN_TEMPLATE_PROMPT;
+    }
+    if (sampleTypes.includes('cell-line')) {
+      systemPrompt += CELL_LINE_TEMPLATE_PROMPT;
+    }
+    if (sampleTypes.includes('vertebrate')) {
+      systemPrompt += VERTEBRATE_TEMPLATE_PROMPT;
+    }
+
+    // Add quality issues if provided
+    if (qualityIssues && qualityIssues.length > 0) {
+      systemPrompt += buildQualityIssuesPrompt(qualityIssues);
+    }
+
     messages.push({
       role: 'system',
-      content: SDRF_SYSTEM_PROMPT,
+      content: systemPrompt,
     });
 
     // User prompt with context
@@ -115,6 +233,79 @@ export class PromptService {
     });
 
     return messages;
+  }
+
+  /**
+   * Detects sample types from the analysis context.
+   * Returns array of detected types for template selection.
+   */
+  detectSampleTypes(context: SdrfAnalysisContext): SampleType[] {
+    const types: SampleType[] = [];
+
+    // Find organism column
+    const organismCol = context.columns.find(
+      (c: ColumnContext) => c.name.toLowerCase() === 'characteristics[organism]'
+    );
+
+    // Find cell line column
+    const cellLineCol = context.columns.find(
+      (c: ColumnContext) => c.name.toLowerCase() === 'characteristics[cell line]'
+    );
+
+    if (organismCol) {
+      const organisms = organismCol.uniqueValues.map(v => v.toLowerCase());
+
+      // Check for human samples
+      if (organisms.some(o => o.includes('homo sapiens') || o.includes('human'))) {
+        types.push('human');
+      }
+
+      // Check for other vertebrates
+      const vertebrates = [
+        'mus musculus', 'mouse',
+        'rattus norvegicus', 'rat',
+        'danio rerio', 'zebrafish',
+        'sus scrofa', 'pig',
+        'bos taurus', 'cow', 'cattle',
+        'gallus gallus', 'chicken',
+        'ovis aries', 'sheep',
+        'canis', 'dog',
+        'felis catus', 'cat',
+      ];
+
+      if (organisms.some(o => vertebrates.some(v => o.includes(v)))) {
+        types.push('vertebrate');
+      }
+    }
+
+    // Check for cell line data
+    if (cellLineCol && cellLineCol.uniqueValues.length > 0) {
+      const hasActualCellLines = cellLineCol.uniqueValues.some(
+        v => v && v.toLowerCase() !== 'not available' && v.toLowerCase() !== 'not applicable'
+      );
+      if (hasActualCellLines) {
+        types.push('cell-line');
+      }
+    }
+
+    // Default to 'other' if no specific type detected
+    if (types.length === 0) {
+      types.push('other');
+    }
+
+    return types;
+  }
+
+  /**
+   * Converts ColumnQuality results to QualityIssueForPrompt format.
+   */
+  convertQualityToPromptIssues(qualities: ColumnQuality[]): QualityIssueForPrompt[] {
+    return qualities
+      .filter(q => q.action === 'review' || q.action === 'remove')
+      .map(q => ({
+        column: q.name,
+        reason: q.reason + (q.suggestedFix ? ` (Fix: ${q.suggestedFix})` : ''),
+      }));
   }
 
   /**
@@ -353,9 +544,105 @@ Respond with JSON:
 
   /**
    * Gets the system prompt for reference.
+   * Optionally includes template-specific prompts based on sample types.
    */
-  getSystemPrompt(): string {
+  getSystemPrompt(sampleTypes?: SampleType[], qualityIssues?: QualityIssueForPrompt[]): string {
+    let prompt = SDRF_SYSTEM_PROMPT;
+
+    if (sampleTypes) {
+      if (sampleTypes.includes('human')) {
+        prompt += HUMAN_TEMPLATE_PROMPT;
+      }
+      if (sampleTypes.includes('cell-line')) {
+        prompt += CELL_LINE_TEMPLATE_PROMPT;
+      }
+      if (sampleTypes.includes('vertebrate')) {
+        prompt += VERTEBRATE_TEMPLATE_PROMPT;
+      }
+    }
+
+    if (qualityIssues && qualityIssues.length > 0) {
+      prompt += buildQualityIssuesPrompt(qualityIssues);
+    }
+
+    return prompt;
+  }
+
+  /**
+   * Gets the base SDRF rules prompt without template additions.
+   */
+  getBaseSystemPrompt(): string {
     return SDRF_SYSTEM_PROMPT;
+  }
+
+  /**
+   * Gets template-specific prompt additions.
+   */
+  getTemplatePrompt(sampleType: SampleType): string {
+    switch (sampleType) {
+      case 'human':
+        return HUMAN_TEMPLATE_PROMPT;
+      case 'cell-line':
+        return CELL_LINE_TEMPLATE_PROMPT;
+      case 'vertebrate':
+        return VERTEBRATE_TEMPLATE_PROMPT;
+      default:
+        return '';
+    }
+  }
+
+  /**
+   * Builds a chat system prompt with example context for actionable suggestions.
+   *
+   * @param tableContext - Brief context about the current table
+   * @param qualityContext - Quality issues found in the table
+   * @param examplesContext - Example values from annotated datasets
+   */
+  buildChatSystemPrompt(
+    tableContext: string,
+    qualityContext: string,
+    examplesContext: string
+  ): string {
+    return `You are an SDRF file expert. Help users fix proteomics metadata.
+
+SDRF RULES:
+- Use "normal" for healthy samples (never "control")
+- Use "not available" for missing data (never "NA" or "unknown")
+- Values must be lowercase (e.g., "homo sapiens", "male", "adult")
+- Age format: 25Y, 6M, 30D
+
+TABLE INFO:
+${tableContext}
+
+ISSUES FOUND:
+${qualityContext}
+${examplesContext ? `\nEXAMPLE VALUES:\n${examplesContext}` : ''}
+
+RESPONSE FORMAT - You MUST reply with this exact JSON structure:
+{"text": "your explanation", "suggestions": [{"type": "set_value", "column": "column_name", "sampleIndices": [1,2,3], "suggestedValue": "value", "description": "what this does", "confidence": "high"}]}
+
+RULES:
+- type must be: set_value, remove_column, rename_column, or add_column
+- sampleIndices are 1-based row numbers (1 = first data row)
+- confidence: high, medium, or low
+- If no fix needed, use empty array: {"text": "explanation", "suggestions": []}
+
+Reply ONLY with valid JSON. No markdown, no explanation outside JSON.`;
+  }
+
+  /**
+   * Builds the chat system prompt for non-JSON responses (fallback).
+   */
+  buildSimpleChatPrompt(tableContext: string, qualityContext: string): string {
+    return `You are an expert assistant for SDRF (Sample and Data Relationship Format) files in proteomics.
+
+Current table context:
+${tableContext}
+
+Quality analysis:
+${qualityContext}
+
+Help the user with their questions about their SDRF data. Provide specific, actionable advice. Keep responses concise.`;
   }
 
   // ============ Private Methods ============
