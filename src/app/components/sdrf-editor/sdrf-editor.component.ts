@@ -28,6 +28,7 @@ import { FormsModule } from '@angular/forms';
 import { SdrfTable } from '../../core/models/sdrf-table';
 import { SdrfColumn, getValueForSample } from '../../core/models/sdrf-column';
 import { ValidationResult } from '../../core/models/validation';
+import { getSdrfColumnConfig } from '../../core/models/sdrf-config';
 import { SdrfParserService, SdrfParseResult } from '../../core/services/sdrf-parser.service';
 import { SdrfValidatorService } from '../../core/services/sdrf-validator.service';
 import { SdrfExportService } from '../../core/services/sdrf-export.service';
@@ -104,6 +105,13 @@ const BUFFER_ROWS = 10;
               Validate
             </button>
             <span class="toolbar-divider"></span>
+            <button class="btn btn-secondary" (click)="addRowAtEnd()" title="Add a new row at the end">
+              + Row
+            </button>
+            <button class="btn btn-secondary" (click)="showAddColumnDialog()" title="Add a new column">
+              + Column
+            </button>
+            <span class="toolbar-divider"></span>
             <button
               class="btn"
               [class.btn-active]="showFilterBar()"
@@ -171,6 +179,7 @@ const BUFFER_ROWS = 10;
         [table]="table()"
         [selectedCount]="selectedSamples().size"
         [selectedSamples]="selectedSamples()"
+        [preselectedColumn]="selectedColumnForBulk()"
         (clearSelection)="clearSelection()"
         (bulkEdit)="onBulkColumnEdit($event)"
         (copyFromFirst)="onCopyFromFirst($event)"
@@ -228,6 +237,7 @@ const BUFFER_ROWS = 10;
                           [class.required]="column.isRequired"
                           [class.selected]="selectedCell()?.col === colIdx"
                           [class.sorted]="sortColumn() === colIdx"
+                          [title]="getColumnTooltip(column.name)"
                           (click)="onHeaderClick(colIdx, $event)"
                         >
                           <span class="col-name">{{ column.name }}</span>
@@ -456,9 +466,58 @@ const BUFFER_ROWS = 10;
               <button (click)="clearSelectedCells()">
                 Clear selected cells
               </button>
+              <hr />
+              <button (click)="insertRowAbove()">
+                Insert row above
+              </button>
+              <button (click)="insertRowBelow()">
+                Insert row below
+              </button>
+              <button (click)="deleteSelectedRows()">
+                Delete selected rows
+              </button>
+              <hr />
+              <button (click)="showAddColumnDialog()">
+                Add column...
+              </button>
+              <button (click)="deleteColumn()">
+                Delete this column
+              </button>
+              <hr />
               <button (click)="closeContextMenu()">
                 Cancel
               </button>
+            </div>
+          }
+
+          <!-- Add Column Dialog -->
+          @if (showAddColumnDialogFlag()) {
+            <div class="dialog-backdrop" (click)="closeAddColumnDialog()">
+              <div class="dialog-content" (click)="$event.stopPropagation()">
+                <h3>Add New Column</h3>
+                <div class="dialog-form">
+                  <label>Column Name:</label>
+                  <input
+                    type="text"
+                    [value]="newColumnName()"
+                    (input)="newColumnName.set($any($event.target).value)"
+                    placeholder="e.g., characteristics[tissue], comment[notes]"
+                    (keydown.enter)="addNewColumn()"
+                    #newColInput
+                  />
+                  <p class="dialog-hint">
+                    Use SDRF format: characteristics[name], comment[name], factor value[name]
+                  </p>
+                </div>
+                <div class="dialog-actions">
+                  <button class="btn btn-primary" (click)="addNewColumn()" [disabled]="!newColumnName().trim()">
+                    Add Column
+                  </button>
+                  <button class="btn" (click)="closeAddColumnDialog()">
+                    Cancel
+                  </button>
+                </div>
+              </div>
             </div>
           }
 
@@ -890,18 +949,21 @@ const BUFFER_ROWS = 10;
 
     /* Specific reserved value types with visible background */
     .cell-value.reserved-not-available {
-      color: #757575;
+      color: #e65100;
       font-style: italic;
-      background: #f5f5f5;
+      font-weight: 500;
+      background: #fff3e0;
+      border: 1px dashed #ffb74d;
       border-radius: 3px;
       padding: 2px 6px;
       margin: -2px -6px;
     }
 
     .cell-value.reserved-not-applicable {
-      color: #757575;
+      color: #546e7a;
       font-style: italic;
-      background: #f5f5f5;
+      background: #eceff1;
+      border: 1px solid #cfd8dc;
       border-radius: 3px;
       padding: 2px 6px;
       margin: -2px -6px;
@@ -1455,6 +1517,105 @@ const BUFFER_ROWS = 10;
       border: none;
       border-top: 1px solid #eee;
     }
+
+    /* Dialog styles */
+    .dialog-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .dialog-content {
+      background: white;
+      border-radius: 8px;
+      padding: 24px;
+      min-width: 400px;
+      max-width: 500px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    }
+
+    .dialog-content h3 {
+      margin: 0 0 16px 0;
+      font-size: 18px;
+      color: #333;
+    }
+
+    .dialog-form {
+      margin-bottom: 20px;
+    }
+
+    .dialog-form label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: #666;
+    }
+
+    .dialog-form input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+
+    .dialog-form input:focus {
+      outline: none;
+      border-color: #1a237e;
+      box-shadow: 0 0 0 2px rgba(26, 35, 126, 0.1);
+    }
+
+    .dialog-hint {
+      margin: 8px 0 0 0;
+      font-size: 12px;
+      color: #888;
+    }
+
+    .dialog-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .dialog-actions .btn {
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .dialog-actions .btn-primary {
+      background: #1a237e;
+      color: white;
+      border: none;
+    }
+
+    .dialog-actions .btn-primary:hover:not(:disabled) {
+      background: #283593;
+    }
+
+    .dialog-actions .btn-primary:disabled {
+      background: #9e9e9e;
+      cursor: not-allowed;
+    }
+
+    .dialog-actions .btn:not(.btn-primary) {
+      background: #f5f5f5;
+      border: 1px solid #ddd;
+      color: #333;
+    }
+
+    .dialog-actions .btn:not(.btn-primary):hover {
+      background: #e0e0e0;
+    }
   `],
 })
 export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, OnDestroy {
@@ -1526,6 +1687,9 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   /** Selected sample indices (1-based) */
   selectedSamples = signal<Set<number>>(new Set());
+
+  /** Selected column index for bulk operations (when using "Select all in column") */
+  selectedColumnForBulk = signal<number | null>(null);
 
   /** Whether stats panel is visible */
   showStatsPanel = signal(false);
@@ -2629,6 +2793,7 @@ How can I fix this?`;
 
   clearSelection(): void {
     this.selectedSamples.set(new Set());
+    this.selectedColumnForBulk.set(null);
     this.lastSelectedRow = null;
   }
 
@@ -2672,12 +2837,15 @@ How can I fix this?`;
     const t = this.table();
     if (!ctx || !t) return;
 
+    // Select all samples in this column
     const newSelection = new Set<number>();
     for (let i = 1; i <= t.sampleCount; i++) {
       newSelection.add(i);
     }
 
     this.selectedSamples.set(newSelection);
+    // Remember which column was selected for bulk operations
+    this.selectedColumnForBulk.set(ctx.col);
     this.closeContextMenu();
   }
 
@@ -2698,6 +2866,281 @@ How can I fix this?`;
     }
 
     this.bulkSetValue(ctx.col, '', Array.from(selected));
+    this.closeContextMenu();
+  }
+
+  // ============ Row Management Methods ============
+
+  /**
+   * Add a new row at the end of the table.
+   */
+  addRowAtEnd(): void {
+    const t = this.table();
+    if (!t) return;
+
+    // Create new table with one more sample
+    const newTable: SdrfTable = {
+      ...t,
+      sampleCount: t.sampleCount + 1,
+      columns: t.columns.map((col) => {
+        // If column has a single value, it applies to all samples including new one
+        // If column has modifiers, we need to add a default value for the new sample
+        if (col.modifiers.length > 0) {
+          return {
+            ...col,
+            modifiers: [
+              ...col.modifiers,
+              {
+                samples: `${t.sampleCount + 1}`,
+                value: '',
+              },
+            ],
+          };
+        }
+        return col;
+      }),
+    };
+
+    this.table.set(newTable);
+    this.closeContextMenu();
+  }
+
+  /**
+   * Insert a row above the current context menu row.
+   */
+  insertRowAbove(): void {
+    const ctx = this.contextMenu();
+    if (!ctx) return;
+    this.insertRowAt(ctx.row);
+  }
+
+  /**
+   * Insert a row below the current context menu row.
+   */
+  insertRowBelow(): void {
+    const ctx = this.contextMenu();
+    if (!ctx) return;
+    this.insertRowAt(ctx.row + 1);
+  }
+
+  /**
+   * Insert a row at a specific position (1-based).
+   */
+  private insertRowAt(position: number): void {
+    const t = this.table();
+    if (!t) return;
+
+    // Adjust all sample ranges in modifiers
+    const newColumns = t.columns.map((col) => {
+      if (col.modifiers.length === 0) {
+        // Single value column - add modifier for new row
+        return {
+          ...col,
+          modifiers: [
+            {
+              samples: `${position}`,
+              value: '',
+            },
+          ],
+        };
+      }
+
+      // Shift existing modifiers and add new row
+      const newModifiers = col.modifiers.map((mod) => {
+        const ranges = mod.samples.split(',').map((r: string) => {
+          if (r.includes('-')) {
+            const [start, end] = r.split('-').map(Number);
+            const newStart = start >= position ? start + 1 : start;
+            const newEnd = end >= position ? end + 1 : end;
+            return `${newStart}-${newEnd}`;
+          }
+          const idx = parseInt(r);
+          return idx >= position ? `${idx + 1}` : r;
+        });
+        return { ...mod, samples: ranges.join(',') };
+      });
+
+      // Add new row modifier
+      newModifiers.push({
+        samples: `${position}`,
+        value: '',
+      });
+
+      return { ...col, modifiers: newModifiers };
+    });
+
+    const newTable: SdrfTable = {
+      ...t,
+      sampleCount: t.sampleCount + 1,
+      columns: newColumns,
+    };
+
+    this.table.set(newTable);
+    this.closeContextMenu();
+  }
+
+  /**
+   * Delete selected rows from the table.
+   */
+  deleteSelectedRows(): void {
+    const t = this.table();
+    const selected = this.selectedSamples();
+    if (!t || selected.size === 0) {
+      this.closeContextMenu();
+      return;
+    }
+
+    const rowsToDelete = Array.from(selected).sort((a, b) => b - a); // Delete from end first
+
+    const newColumns = t.columns.map((col) => {
+      if (col.modifiers.length === 0) {
+        // Single value column - no change needed except sample count
+        return col;
+      }
+
+      // Filter and adjust modifiers
+      let newModifiers = col.modifiers.filter((mod) => {
+        // Check if this modifier covers any of the deleted rows
+        const ranges = mod.samples.split(',');
+        for (const range of ranges) {
+          if (range.includes('-')) {
+            const [start, end] = range.split('-').map(Number);
+            // If range is completely within deleted rows, filter it out
+            const allDeleted = Array.from({ length: end - start + 1 }, (_, i) => start + i)
+              .every((idx) => selected.has(idx));
+            if (!allDeleted) return true;
+          } else {
+            if (!selected.has(parseInt(range))) return true;
+          }
+        }
+        return false;
+      });
+
+      // Adjust remaining modifier ranges
+      for (const deletedRow of rowsToDelete) {
+        newModifiers = newModifiers.map((mod) => {
+          const ranges = mod.samples.split(',').map((r: string) => {
+            if (r.includes('-')) {
+              const [start, end] = r.split('-').map(Number);
+              const newStart = start > deletedRow ? start - 1 : start;
+              const newEnd = end > deletedRow ? end - 1 : end;
+              return `${newStart}-${newEnd}`;
+            }
+            const idx = parseInt(r);
+            return idx > deletedRow ? `${idx - 1}` : r;
+          });
+          return { ...mod, samples: ranges.join(',') };
+        });
+      }
+
+      return { ...col, modifiers: newModifiers };
+    });
+
+    const newSampleCount = t.sampleCount - selected.size;
+
+    const newTable: SdrfTable = {
+      ...t,
+      sampleCount: newSampleCount,
+      columns: newColumns,
+    };
+
+    this.table.set(newTable);
+    this.clearSelection();
+    this.closeContextMenu();
+  }
+
+  // ============ Column Management Methods ============
+
+  /** Signal for add column dialog visibility */
+  showAddColumnDialogFlag = signal(false);
+  newColumnName = signal('');
+
+  /**
+   * Show dialog to add a new column.
+   */
+  showAddColumnDialog(): void {
+    this.showAddColumnDialogFlag.set(true);
+    this.newColumnName.set('');
+    this.closeContextMenu();
+  }
+
+  /**
+   * Close the add column dialog.
+   */
+  closeAddColumnDialog(): void {
+    this.showAddColumnDialogFlag.set(false);
+    this.newColumnName.set('');
+  }
+
+  /**
+   * Add a new column to the table.
+   */
+  addNewColumn(): void {
+    const name = this.newColumnName().trim();
+    if (!name) return;
+
+    const t = this.table();
+    if (!t) return;
+
+    // Determine column type from name
+    let type: 'characteristics' | 'comment' | 'factor_value' | 'special' = 'special';
+    const lowerName = name.toLowerCase();
+    if (lowerName.startsWith('characteristics[')) {
+      type = 'characteristics';
+    } else if (lowerName.startsWith('comment[')) {
+      type = 'comment';
+    } else if (lowerName.startsWith('factor value[')) {
+      type = 'factor_value';
+    }
+
+    const newColumn: SdrfColumn = {
+      name,
+      type,
+      columnPosition: t.columns.length,
+      value: '',
+      modifiers: [],
+      isRequired: false,
+    };
+
+    const newTable: SdrfTable = {
+      ...t,
+      columns: [...t.columns, newColumn],
+    };
+
+    this.table.set(newTable);
+    this.closeAddColumnDialog();
+  }
+
+  /**
+   * Delete the column from context menu.
+   */
+  deleteColumn(): void {
+    const ctx = this.contextMenu();
+    const t = this.table();
+    if (!ctx || !t) return;
+
+    const colIndex = ctx.col;
+    if (colIndex < 0 || colIndex >= t.columns.length) {
+      this.closeContextMenu();
+      return;
+    }
+
+    const columnName = t.columns[colIndex].name;
+    if (!confirm(`Delete column "${columnName}"? This cannot be undone.`)) {
+      this.closeContextMenu();
+      return;
+    }
+
+    const newColumns = t.columns
+      .filter((_, idx) => idx !== colIndex)
+      .map((col, idx) => ({ ...col, columnPosition: idx }));
+
+    const newTable: SdrfTable = {
+      ...t,
+      columns: newColumns,
+    };
+
+    this.table.set(newTable);
     this.closeContextMenu();
   }
 
@@ -2783,6 +3226,42 @@ How can I fix this?`;
     // Data Properties - Gray (everything else: comments, assay, technical, files)
     // This includes: comment[...], assay name, technology type, data files, etc.
     return 'comment';
+  }
+
+  /**
+   * Gets the tooltip text for a column header.
+   * Combines description, examples, and ontology info from column config.
+   */
+  getColumnTooltip(columnName: string): string {
+    const config = getSdrfColumnConfig(columnName);
+    if (!config) {
+      return columnName;
+    }
+
+    const parts: string[] = [];
+
+    // Description
+    if (config.description) {
+      parts.push(config.description);
+    }
+
+    // Required indicator
+    if (config.isRequired) {
+      parts.push('(Required column)');
+    }
+
+    // Ontologies
+    if (config.ontologies && config.ontologies.length > 0) {
+      parts.push(`Ontologies: ${config.ontologies.join(', ')}`);
+    }
+
+    // Examples
+    if (config.examples && config.examples.length > 0) {
+      const exampleList = config.examples.slice(0, 3).join(', ');
+      parts.push(`Examples: ${exampleList}`);
+    }
+
+    return parts.length > 0 ? parts.join('\n') : columnName;
   }
 
   // ============ Sorting Methods ============

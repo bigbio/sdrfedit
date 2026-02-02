@@ -36,11 +36,20 @@ import {
   ParsedChatResponse,
   generateSuggestionId,
 } from '../../core/models/llm';
+import {
+  ActionableSuggestion,
+  SuggestionActionEvent,
+  SuggestionAction,
+  getSuggestionTypeLabel,
+} from '../../core/models/actionable-suggestion';
+import { OntologySuggestion } from '../../core/models/ontology';
 import { SdrfTable } from '../../core/models/sdrf-table';
 import { getValueForSample } from '../../core/models/sdrf-column';
 import {
   RecommendationService,
   recommendationService,
+  ActionableRecommendationResult,
+  AnalysisProgress,
 } from '../../core/services/llm/recommendation.service';
 import {
   LlmSettingsService,
@@ -69,6 +78,15 @@ import {
   ValidationError,
 } from '../../core/services/pyodide-validator.service';
 import { sdrfExport } from '../../core/services/sdrf-export.service';
+import {
+  SuggestionEnrichmentService,
+  suggestionEnrichmentService,
+} from '../../core/services/llm/suggestion-enrichment.service';
+import {
+  SuggestionStateService,
+  suggestionStateService,
+} from '../../core/services/suggestion-state.service';
+import { SuggestionCardComponent } from '../suggestion-card/suggestion-card.component';
 
 export interface ApplyRecommendationEvent {
   recommendation: SdrfRecommendation;
@@ -90,7 +108,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
 @Component({
   selector: 'sdrf-recommend-panel',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, SuggestionCardComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="ai-panel">
@@ -104,10 +122,10 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
           }
         </div>
         <div class="header-actions">
-          <button class="icon-btn" (click)="openSettings.emit()" title="Settings">
+          <button type="button" class="icon-btn" (click)="openSettings.emit()" title="Settings">
             ⚙️
           </button>
-          <button class="icon-btn" (click)="close.emit()" title="Close">×</button>
+          <button type="button" class="icon-btn" (click)="close.emit()" title="Close">×</button>
         </div>
       </div>
 
@@ -115,7 +133,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
       @if (!isConfigured()) {
         <div class="empty-state">
           <p>Configure an AI provider to get started.</p>
-          <button class="btn btn-primary" (click)="openSettings.emit()">
+          <button type="button" class="btn btn-primary" (click)="openSettings.emit()">
             Configure Provider
           </button>
         </div>
@@ -123,6 +141,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
         <!-- Tabs -->
         <div class="panel-tabs">
           <button
+            type="button"
             class="tab"
             [class.active]="activeTab() === 'quality'"
             (click)="activeTab.set('quality')"
@@ -133,6 +152,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
             }
           </button>
           <button
+            type="button"
             class="tab"
             [class.active]="activeTab() === 'recommendations'"
             (click)="activeTab.set('recommendations')"
@@ -143,6 +163,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
             }
           </button>
           <button
+            type="button"
             class="tab"
             [class.active]="activeTab() === 'chat'"
             (click)="activeTab.set('chat')"
@@ -150,6 +171,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
             Chat
           </button>
           <button
+            type="button"
             class="tab"
             [class.active]="activeTab() === 'advanced'"
             (click)="activeTab.set('advanced')"
@@ -166,6 +188,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
               <!-- Analyze Button -->
               <div class="quality-actions">
                 <button
+                  type="button"
                   class="btn btn-primary btn-block"
                   [disabled]="qualityAnalyzing() || !table"
                   (click)="analyzeQuality()"
@@ -176,7 +199,17 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                     Analyze Quality
                   }
                 </button>
+                @if (!table) {
+                  <p class="quality-hint">No table loaded</p>
+                }
               </div>
+
+              <!-- Quality Error -->
+              @if (error() && activeTab() === 'quality') {
+                <div class="quality-error">
+                  {{ error() }}
+                </div>
+              }
 
               @if (qualityResult()) {
                 <!-- Summary -->
@@ -202,7 +235,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                   <div class="fixes-section">
                     <div class="section-header">
                       <h4>Auto-Fixes Available</h4>
-                      <button class="btn btn-sm" (click)="applyAllSafeFixes()" [disabled]="safeFixes().length === 0">
+                      <button type="button" class="btn btn-sm" (click)="applyAllSafeFixes()" [disabled]="safeFixes().length === 0">
                         Apply Safe ({{ safeFixes().length }})
                       </button>
                     </div>
@@ -243,8 +276,8 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                               }
                             </div>
                           </div>
-                          <button class="btn btn-xs btn-primary" (click)="applyFixAction(fix)">
-                            Apply
+                          <button type="button" class="btn btn-xs btn-primary" [disabled]="isApplyingFix()" (click)="logClick(fix); applyFixAction(fix); $event.stopPropagation()">
+                            {{ isApplyingFix() ? 'Applying...' : 'Apply' }}
                           </button>
                         </div>
                       }
@@ -338,13 +371,28 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                   </label>
                 </div>
 
+                <!-- Toggle for OLS validation -->
+                <label class="focus-option ols-toggle">
+                  <input type="checkbox" [checked]="useActionableSuggestions()" (change)="useActionableSuggestions.set(!useActionableSuggestions())" />
+                  <span class="ols-label">
+                    Validate with OLS
+                    <span class="ols-hint" title="Validates suggestions against the Ontology Lookup Service">?</span>
+                  </span>
+                </label>
+
                 <button
+                  type="button"
                   class="btn btn-primary btn-block"
-                  [disabled]="analyzing() || !table"
-                  (click)="analyze()"
+                  [disabled]="(useActionableSuggestions() ? actionableAnalyzing() : analyzing()) || !table"
+                  (click)="useActionableSuggestions() ? analyzeActionable() : analyze()"
                 >
-                  @if (analyzing()) {
-                    <span class="spinner"></span> Analyzing...
+                  @if (useActionableSuggestions() ? actionableAnalyzing() : analyzing()) {
+                    <span class="spinner"></span>
+                    @if (enrichmentProgress()) {
+                      {{ enrichmentProgress() }}
+                    } @else {
+                      Analyzing...
+                    }
                   } @else {
                     Analyze SDRF
                   }
@@ -355,7 +403,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
               @if (error()) {
                 <div class="error-msg">
                   {{ error() }}
-                  <button class="dismiss-btn" (click)="clearError()">×</button>
+                  <button type="button" class="dismiss-btn" (click)="clearError()">×</button>
                 </div>
               }
 
@@ -373,8 +421,52 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                 </details>
               }
 
-              <!-- Results -->
-              @if (result() && !analyzing()) {
+              <!-- Results - Actionable Suggestions (new system with OLS validation) -->
+              @if (useActionableSuggestions() && pendingActionableSuggestions().length > 0 && !actionableAnalyzing()) {
+                <div class="results-section">
+                  <!-- OLS Stats Banner -->
+                  <div class="ols-stats-banner">
+                    <span class="ols-stat">
+                      <span class="material-icons">verified</span>
+                      {{ olsMatchedCount() }} OLS verified
+                    </span>
+                    <span class="ols-stat">
+                      <span class="material-icons">search</span>
+                      {{ olsValidatedCount() }} validated
+                    </span>
+                    <span class="ols-stat">
+                      <span class="material-icons">lightbulb</span>
+                      {{ actionableSuggestionCount() }} suggestions
+                    </span>
+                  </div>
+
+                  <!-- Batch Actions -->
+                  <div class="batch-actions">
+                    @if (olsMatchedCount() > 0) {
+                      <button type="button" class="btn btn-sm btn-success" (click)="applyOlsValidatedActionable()">
+                        Apply OLS Verified ({{ olsMatchedCount() }})
+                      </button>
+                    }
+                    <button type="button" class="btn btn-sm" (click)="applyHighConfidenceActionable()">
+                      Apply High Confidence
+                    </button>
+                  </div>
+
+                  <!-- Actionable Suggestions List -->
+                  <div class="actionable-suggestions-list">
+                    @for (suggestion of pendingActionableSuggestions(); track suggestion.id) {
+                      <app-suggestion-card
+                        [suggestion]="suggestion"
+                        (actionTriggered)="handleSuggestionAction($event)"
+                        (alternativeSelected)="handleAlternativeSelected($event)"
+                      />
+                    }
+                  </div>
+                </div>
+              }
+
+              <!-- Results - Legacy system (without OLS validation) -->
+              @if (!useActionableSuggestions() && result() && !analyzing()) {
                 <div class="results-section">
                   <!-- Sort & Filter Bar -->
                   <div class="results-bar">
@@ -392,21 +484,25 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                   <!-- Filter Pills -->
                   <div class="filter-pills">
                     <button
+                      type="button"
                       class="pill"
                       [class.active]="filterType() === 'all'"
                       (click)="filterType.set('all')"
                     >All</button>
                     <button
+                      type="button"
                       class="pill"
                       [class.active]="filterType() === 'fill_value'"
                       (click)="filterType.set('fill_value')"
                     >Fill</button>
                     <button
+                      type="button"
                       class="pill"
                       [class.active]="filterType() === 'ontology_suggestion'"
                       (click)="filterType.set('ontology_suggestion')"
                     >Ontology</button>
                     <button
+                      type="button"
                       class="pill"
                       [class.active]="filterType() === 'consistency_fix'"
                       (click)="filterType.set('consistency_fix')"
@@ -416,10 +512,10 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                   <!-- Batch Actions -->
                   @if (unappliedCount() > 0) {
                     <div class="batch-actions">
-                      <button class="btn btn-sm" (click)="applyHighConfidence()">
+                      <button type="button" class="btn btn-sm" (click)="applyHighConfidence()">
                         Apply High Confidence ({{ highConfidenceCount() }})
                       </button>
-                      <button class="btn btn-sm" (click)="applyAll()">
+                      <button type="button" class="btn btn-sm" (click)="applyAll()">
                         Apply All ({{ unappliedCount() }})
                       </button>
                     </div>
@@ -430,7 +526,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                     @if (filteredRecommendations().length === 0) {
                       <div class="no-results">
                         @if (result()!.recommendations.length === 0) {
-                          ✅ No issues found. Your SDRF looks good!
+                          No issues found. Your SDRF looks good!
                         } @else {
                           No recommendations match current filter.
                         }
@@ -474,15 +570,15 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                             <!-- Actions -->
                             <div class="rec-actions">
                               @if (rec.applied) {
-                                <span class="applied-label">✓ Applied</span>
+                                <span class="applied-label">Applied</span>
                               } @else {
-                                <button class="btn btn-primary btn-xs" (click)="onApplyClick(rec)">
+                                <button type="button" class="btn btn-primary btn-xs" (click)="onApplyClick(rec)">
                                   Accept
                                 </button>
-                                <button class="btn btn-xs" (click)="onPreviewClick(rec)">
+                                <button type="button" class="btn btn-xs" (click)="onPreviewClick(rec)">
                                   Preview
                                 </button>
-                                <button class="btn btn-xs btn-muted" (click)="dismissRecommendation(rec)">
+                                <button type="button" class="btn btn-xs btn-muted" (click)="dismissRecommendation(rec)">
                                   Dismiss
                                 </button>
                               }
@@ -492,6 +588,16 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                       }
                     }
                   </div>
+                </div>
+              }
+
+              <!-- Empty state when no suggestions -->
+              @if ((useActionableSuggestions() ? pendingActionableSuggestions().length === 0 : !result()) && !(useActionableSuggestions() ? actionableAnalyzing() : analyzing())) {
+                <div class="no-results empty-state-suggestions">
+                  <p>Click "Analyze SDRF" to get AI-powered suggestions.</p>
+                  @if (useActionableSuggestions()) {
+                    <p class="hint">Suggestions will be validated against OLS for accurate ontology terms.</p>
+                  }
                 </div>
               }
             </div>
@@ -529,10 +635,10 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                               </div>
                               <div class="suggestion-actions">
                                 @if (!suggestion.applied && !suggestion.dismissed) {
-                                  <button class="btn btn-primary btn-xs" (click)="applyChatSuggestion(suggestion, msg)">
+                                  <button type="button" class="btn btn-primary btn-xs" (click)="applyChatSuggestion(suggestion, msg)">
                                     Apply
                                   </button>
-                                  <button class="btn btn-xs btn-muted" (click)="dismissChatSuggestion(suggestion, msg)">
+                                  <button type="button" class="btn btn-xs btn-muted" (click)="dismissChatSuggestion(suggestion, msg)">
                                     Dismiss
                                   </button>
                                 } @else if (suggestion.applied) {
@@ -586,6 +692,7 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                   rows="2"
                 ></textarea>
                 <button
+                  type="button"
                   class="btn btn-primary"
                   [disabled]="!chatInput().trim() || chatLoading()"
                   (click)="sendChatMessage()"
@@ -1347,6 +1454,23 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
       flex-shrink: 0;
     }
 
+    .quality-hint {
+      margin: 8px 0 0 0;
+      font-size: 11px;
+      color: #9ca3af;
+      text-align: center;
+    }
+
+    .quality-error {
+      margin: 12px 16px;
+      padding: 10px 12px;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 6px;
+      color: #dc2626;
+      font-size: 12px;
+    }
+
     .quality-summary {
       padding: 12px 16px;
       border-bottom: 1px solid #e5e7eb;
@@ -1624,6 +1748,90 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
       margin-bottom: 0;
     }
 
+    /* OLS Toggle */
+    .ols-toggle {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px dashed #e5e7eb;
+    }
+
+    .ols-label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .ols-hint {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #e5e7eb;
+      color: #6b7280;
+      font-size: 9px;
+      cursor: help;
+    }
+
+    /* OLS Stats Banner */
+    .ols-stats-banner {
+      display: flex;
+      gap: 16px;
+      padding: 8px 16px;
+      background: linear-gradient(90deg, #e0f2fe, #f0fdf4);
+      border-bottom: 1px solid #e5e7eb;
+      flex-shrink: 0;
+    }
+
+    .ols-stat {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: #4b5563;
+    }
+
+    .ols-stat .material-icons {
+      font-size: 14px;
+      color: #059669;
+    }
+
+    /* Actionable Suggestions List */
+    .actionable-suggestions-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px;
+    }
+
+    /* Empty state for suggestions */
+    .empty-state-suggestions {
+      padding: 40px 20px;
+      text-align: center;
+    }
+
+    .empty-state-suggestions p {
+      margin: 0 0 8px 0;
+      color: #6b7280;
+      font-size: 13px;
+    }
+
+    .empty-state-suggestions .hint {
+      font-size: 11px;
+      color: #9ca3af;
+    }
+
+    /* Success button */
+    .btn-success {
+      background: #059669;
+      color: white;
+      border-color: #059669;
+    }
+
+    .btn-success:hover {
+      background: #047857;
+    }
+
   `],
 })
 export class SdrfRecommendPanelComponent implements OnChanges {
@@ -1694,9 +1902,17 @@ export class SdrfRecommendPanelComponent implements OnChanges {
   private examplesService: SdrfExamplesService;
   private pyodideService: PyodideValidatorService;
   private aiWorker: AiWorkerService;
+  private enrichmentService: SuggestionEnrichmentService;
+  private suggestionState: SuggestionStateService;
 
   // Streaming chat content (shown while response is being generated)
   readonly chatStreamContent = signal<string>('');
+
+  // Actionable Suggestions State
+  readonly actionableResult = signal<ActionableRecommendationResult | null>(null);
+  readonly actionableAnalyzing = signal(false);
+  readonly enrichmentProgress = signal<string>('');
+  readonly useActionableSuggestions = signal(true); // Toggle between old and new
 
   constructor() {
     this.recommendationService = recommendationService;
@@ -1706,6 +1922,8 @@ export class SdrfRecommendPanelComponent implements OnChanges {
     this.examplesService = sdrfExamplesService;
     this.pyodideService = pyodideValidatorService;
     this.aiWorker = new AiWorkerService();
+    this.enrichmentService = suggestionEnrichmentService;
+    this.suggestionState = suggestionStateService;
 
     // Load examples index in background
     this.loadExamplesIndex();
@@ -1760,6 +1978,13 @@ export class SdrfRecommendPanelComponent implements OnChanges {
 
     let recs = res.recommendations.filter(r => !this.dismissedIds.has(r.id));
 
+    // Filter out recommendations where currentValue equals suggestedValue (no-op changes)
+    recs = recs.filter(r => {
+      const current = (r.currentValue || '').trim().toLowerCase();
+      const suggested = (r.suggestedValue || '').trim().toLowerCase();
+      return current !== suggested;
+    });
+
     const typeFilter = this.filterType();
     if (typeFilter !== 'all') {
       recs = recs.filter(r => r.type === typeFilter);
@@ -1799,6 +2024,42 @@ export class SdrfRecommendPanelComponent implements OnChanges {
     this.filteredRecommendations().filter(r => !r.applied && r.confidence === 'high').length
   );
 
+  // Actionable Suggestions Computed
+  readonly pendingActionableSuggestions = computed(() => {
+    const suggestions = this.suggestionState.pendingSuggestions();
+    // Filter out suggestions where ALL current values equal the suggestedValue (no-op changes)
+    return suggestions.filter(s => {
+      const suggested = (s.suggestedValue || '').trim().toLowerCase();
+
+      // If no current values are tracked, keep the suggestion (can't determine if it's a no-op)
+      if (s.currentValues.size === 0) {
+        return true;
+      }
+
+      // Check if any current value is different from the suggested value
+      for (const [_, current] of s.currentValues) {
+        if ((current || '').trim().toLowerCase() !== suggested) {
+          return true; // Keep this suggestion - at least one value would change
+        }
+      }
+      return false; // All values are the same - filter out this suggestion
+    });
+  });
+
+  readonly actionableSuggestionCount = computed(() =>
+    this.pendingActionableSuggestions().length
+  );
+
+  readonly olsValidatedCount = computed(() => {
+    const result = this.actionableResult();
+    return result?.olsValidatedCount || 0;
+  });
+
+  readonly olsMatchedCount = computed(() => {
+    const result = this.actionableResult();
+    return result?.olsMatchedCount || 0;
+  });
+
   readonly systemPromptPreview = computed(() => {
     // Return a preview of the system prompt
     return `You are an expert in proteomics data annotation, specifically the SDRF format...
@@ -1816,6 +2077,14 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['table']) {
+      // Skip reset if we're applying a fix (we'll re-analyze after)
+      if (this.isApplyingFix()) {
+        console.log('ngOnChanges: Skipping reset because fix is being applied');
+        return;
+      }
+
+      console.log('ngOnChanges: Table changed, resetting state');
+
       this.result.set(null);
       this.error.set(null);
       this.streamContent.set('');
@@ -1897,6 +2166,216 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
     this.error.set(null);
   }
 
+  // ============ Actionable Suggestions Methods ============
+
+  /**
+   * Analyzes using the new actionable suggestions system with OLS validation.
+   */
+  async analyzeActionable(): Promise<void> {
+    if (!this.table || this.actionableAnalyzing()) return;
+
+    this.actionableAnalyzing.set(true);
+    this.error.set(null);
+    this.streamContent.set('');
+    this.enrichmentProgress.set('');
+    this.actionableResult.set(null);
+
+    const focusAreas: AnalysisFocusArea[] = [];
+    if (this.focusFillMissing()) focusAreas.push('fill_missing');
+    if (this.focusValidateOntology()) focusAreas.push('validate_ontology');
+    if (this.focusCheckConsistency()) focusAreas.push('check_consistency');
+
+    try {
+      for await (const progress of this.recommendationService.analyzeActionableStreaming(
+        this.table,
+        focusAreas
+      )) {
+        if (progress.type === 'streaming') {
+          this.streamContent.update(s => s + progress.content);
+        } else if (progress.type === 'progress') {
+          this.enrichmentProgress.set(progress.message);
+        }
+      }
+
+      // Get final result from suggestion state
+      const suggestions = this.suggestionState.pendingSuggestions();
+      const result = this.actionableResult();
+
+      if (!result && suggestions.length > 0) {
+        // Build result from state
+        this.actionableResult.set({
+          suggestions,
+          timestamp: new Date(),
+          provider: this.settingsService.getActiveProvider(),
+          model: this.settingsService.getProviderConfig(this.settingsService.getActiveProvider())?.model || '',
+          olsValidatedCount: suggestions.filter(s => s.validation.olsValidated).length,
+          olsMatchedCount: suggestions.filter(s => s.validation.olsMatch).length,
+        });
+      }
+    } catch (err) {
+      this.error.set(err instanceof Error ? err.message : 'Analysis failed');
+    } finally {
+      this.actionableAnalyzing.set(false);
+      this.enrichmentProgress.set('');
+    }
+  }
+
+  /**
+   * Handles an action triggered from a suggestion card.
+   */
+  handleSuggestionAction(event: SuggestionActionEvent): void {
+    const { suggestion, action } = event;
+
+    switch (action.type) {
+      case 'apply':
+      case 'apply_ols':
+        this.applyActionableSuggestion(suggestion);
+        break;
+
+      case 'preview':
+        this.previewActionableSuggestion(suggestion);
+        break;
+
+      case 'chat':
+        this.explainSuggestionInChat(suggestion);
+        break;
+
+      case 'dismiss':
+        this.dismissActionableSuggestion(suggestion);
+        break;
+
+      case 'alternatives':
+        // Handled by card component
+        break;
+    }
+  }
+
+  /**
+   * Applies an actionable suggestion.
+   */
+  applyActionableSuggestion(suggestion: ActionableSuggestion): void {
+    // Convert to SdrfRecommendation for backward compatibility
+    const rec: SdrfRecommendation = {
+      id: suggestion.id,
+      type: suggestion.type as RecommendationType,
+      column: suggestion.column,
+      columnIndex: suggestion.columnIndex,
+      sampleIndices: suggestion.affectedSamples,
+      currentValue: this.getFirstValue(suggestion.currentValues),
+      suggestedValue: suggestion.validation.olsMatch
+        ? suggestion.validation.olsMatch.label
+        : suggestion.suggestedValue,
+      confidence: suggestion.confidence,
+      reasoning: suggestion.reasoning,
+      applied: true,
+      ontologyId: suggestion.validation.olsMatch?.id || suggestion.ontologyId,
+      ontologyLabel: suggestion.validation.olsMatch?.label || suggestion.ontologyLabel,
+    };
+
+    // Mark as applied in state
+    this.suggestionState.markAsApplied(suggestion.id);
+
+    // Emit the apply event
+    this.applyRecommendation.emit({ recommendation: rec });
+  }
+
+  /**
+   * Previews an actionable suggestion.
+   */
+  previewActionableSuggestion(suggestion: ActionableSuggestion): void {
+    const rec: SdrfRecommendation = {
+      id: suggestion.id,
+      type: suggestion.type as RecommendationType,
+      column: suggestion.column,
+      columnIndex: suggestion.columnIndex,
+      sampleIndices: suggestion.affectedSamples,
+      currentValue: this.getFirstValue(suggestion.currentValues),
+      suggestedValue: suggestion.suggestedValue,
+      confidence: suggestion.confidence,
+      reasoning: suggestion.reasoning,
+      applied: false,
+    };
+
+    this.previewRecommendation.emit(rec);
+  }
+
+  /**
+   * Dismisses an actionable suggestion.
+   */
+  dismissActionableSuggestion(suggestion: ActionableSuggestion): void {
+    this.suggestionState.markAsDismissed(suggestion.id);
+  }
+
+  /**
+   * Sends a suggestion to chat for explanation.
+   */
+  async explainSuggestionInChat(suggestion: ActionableSuggestion): Promise<void> {
+    // Switch to chat tab
+    this.activeTab.set('chat');
+
+    // Build the explanation prompt
+    const prompt = this.enrichmentService.buildExplanationPrompt(suggestion);
+
+    // Add user message showing what we're asking about
+    const userMessage = `Please explain this suggestion:\n\n` +
+      `**Column**: ${suggestion.column}\n` +
+      `**Change**: "${this.getFirstValue(suggestion.currentValues)}" → "${suggestion.suggestedValue}"\n` +
+      `**Confidence**: ${suggestion.confidence}`;
+
+    this.chatMessages.update(msgs => [...msgs, {
+      role: 'user',
+      content: userMessage,
+      timestamp: new Date()
+    }]);
+
+    // Link suggestion to chat
+    this.suggestionState.linkToChatMessage(suggestion.id, `chat_${Date.now()}`);
+
+    // Send the full prompt to the AI
+    await this.sendChatMessage(prompt);
+  }
+
+  /**
+   * Handles selection of an OLS alternative from a suggestion card.
+   */
+  handleAlternativeSelected(event: { suggestion: ActionableSuggestion; alternative: OntologySuggestion }): void {
+    const { suggestion, alternative } = event;
+
+    // Update the suggestion with the selected alternative
+    this.suggestionState.updateSuggestionValue(
+      suggestion.id,
+      alternative.label,
+      alternative.id,
+      alternative.label
+    );
+  }
+
+  /**
+   * Applies all high-confidence actionable suggestions.
+   */
+  applyHighConfidenceActionable(): void {
+    const highConf = this.suggestionState.highConfidenceSuggestions();
+    for (const suggestion of highConf) {
+      this.applyActionableSuggestion(suggestion);
+    }
+  }
+
+  /**
+   * Applies all OLS-validated actionable suggestions.
+   */
+  applyOlsValidatedActionable(): void {
+    const validated = this.suggestionState.olsValidatedSuggestions();
+    for (const suggestion of validated) {
+      this.applyActionableSuggestion(suggestion);
+    }
+  }
+
+  private getFirstValue(values: Map<number, string>): string {
+    const iterator = values.values();
+    const first = iterator.next();
+    return first.done ? '' : first.value;
+  }
+
   onSortChange(event: Event): void {
     this.sortBy.set((event.target as HTMLSelectElement).value as SortOption);
   }
@@ -1976,9 +2455,17 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
 
   // Quality methods
   analyzeQuality(): void {
-    if (!this.table || this.qualityAnalyzing()) return;
+    if (!this.table) {
+      console.warn('analyzeQuality: No table available');
+      return;
+    }
+    if (this.qualityAnalyzing()) {
+      console.warn('analyzeQuality: Already analyzing');
+      return;
+    }
 
     this.qualityAnalyzing.set(true);
+    this.error.set(null);
 
     // Run quality analysis (synchronous but we use setTimeout to allow UI update)
     setTimeout(() => {
@@ -1989,53 +2476,160 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
         // Detect available fixes
         const fixes = this.cleaningService.detectAvailableFixes(this.table!, result);
         this.availableFixes.set(fixes);
+      } catch (err) {
+        console.error('Quality analysis failed:', err);
+        this.error.set(`Quality analysis failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
       } finally {
         this.qualityAnalyzing.set(false);
       }
     }, 10);
   }
 
+  // Signal to track when a fix is being applied (for UI disabling and ngOnChanges skip)
+  readonly isApplyingFix = signal(false);
+  // Set of fix IDs currently being applied to prevent duplicate applications
+  private fixesInProgress = new Set<string>();
+  // Timestamp of last fix application to prevent rapid re-triggers
+  private lastFixApplyTime = 0;
+
+  logClick(fix: AutoFix): void {
+    console.log('>>> BUTTON CLICKED <<<', fix.id, fix.type);
+  }
+
   applyFixAction(fix: AutoFix): void {
-    if (!this.table) return;
+    console.log('=== applyFixAction CALLED ===', fix.id, fix.description);
+    const now = Date.now();
+    const timeSinceLastFix = now - this.lastFixApplyTime;
+    console.log('Time since last fix:', timeSinceLastFix, 'ms, isApplyingFix:', this.isApplyingFix(), 'fixesInProgress:', [...this.fixesInProgress]);
 
-    const { table: newTable, result } = this.cleaningService.applyFix(this.table, fix);
+    // Aggressive debounce: prevent any fix application within 500ms of the last one
+    if (timeSinceLastFix < 500) {
+      console.warn('applyFixAction: Debounced (too soon after last fix)', timeSinceLastFix, 'ms');
+      return;
+    }
 
-    if (result.success) {
-      // Emit the fix event with new table
-      this.applyFix.emit({ table: newTable, fix, result });
+    if (!this.table) {
+      console.warn('applyFixAction: No table available');
+      return;
+    }
 
-      // Remove the applied fix from the list
-      this.availableFixes.update(fixes => fixes.filter(f => f.id !== fix.id));
+    // Prevent duplicate applications of the same fix
+    if (this.fixesInProgress.has(fix.id)) {
+      console.warn('applyFixAction: Fix already in progress:', fix.id);
+      return;
+    }
 
-      // Re-analyze quality with the new table
-      // Note: The parent component should update the table input
+    // Prevent applying while another fix is in progress
+    if (this.isApplyingFix()) {
+      console.warn('applyFixAction: Another fix is already being applied');
+      return;
+    }
+
+    // Set all locks IMMEDIATELY before any other operations
+    this.lastFixApplyTime = now;
+    this.isApplyingFix.set(true);
+    this.fixesInProgress.add(fix.id);
+
+    console.log('Applying fix:', fix.id, fix.description);
+
+    try {
+      const { table: newTable, result } = this.cleaningService.applyFix(this.table, fix);
+
+      console.log('Fix result:', result);
+
+      if (result.success) {
+        // Remove the applied fix from the list BEFORE emitting
+        this.availableFixes.update(fixes => fixes.filter(f => f.id !== fix.id));
+
+        // Emit the fix event with new table
+        this.applyFix.emit({ table: newTable, fix, result });
+
+        console.log('Fix applied successfully, changes:', result.changesCount);
+
+        // Re-analyze quality after a delay to get updated fixes
+        setTimeout(() => {
+          this.isApplyingFix.set(false);
+          this.fixesInProgress.delete(fix.id);
+          if (this.table) {
+            this.analyzeQuality();
+          }
+        }, 200);
+      } else {
+        console.warn('Fix was not successful:', result);
+        this.error.set(`Fix failed: ${fix.description}`);
+        this.isApplyingFix.set(false);
+        this.fixesInProgress.delete(fix.id);
+      }
+    } catch (err) {
+      console.error('Error applying fix:', err);
+      this.error.set(`Error applying fix: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      this.isApplyingFix.set(false);
+      this.fixesInProgress.delete(fix.id);
     }
   }
 
   applyAllSafeFixes(): void {
+    const now = Date.now();
+
+    // Aggressive debounce: prevent fix application within 500ms of the last one
+    if (now - this.lastFixApplyTime < 500) {
+      console.warn('applyAllSafeFixes: Debounced (too soon after last fix)');
+      return;
+    }
+
     if (!this.table) return;
+
+    // Prevent applying while another fix is in progress
+    if (this.isApplyingFix()) {
+      console.warn('applyAllSafeFixes: Another fix is already being applied');
+      return;
+    }
 
     const safeFixes = this.safeFixes();
     if (safeFixes.length === 0) return;
 
-    const { table: newTable, results } = this.cleaningService.applyFixes(this.table, safeFixes);
+    // Set all locks IMMEDIATELY
+    this.lastFixApplyTime = now;
+    this.isApplyingFix.set(true);
 
-    const successCount = results.filter(r => r.success).length;
-    if (successCount > 0) {
-      // Emit fix event for the combined result
-      this.applyFix.emit({
-        table: newTable,
-        fix: safeFixes[0], // First fix for reference
-        result: {
-          success: true,
-          changesCount: results.reduce((sum, r) => sum + r.changesCount, 0),
-        }
-      });
+    console.log('Applying all safe fixes:', safeFixes.length);
 
-      // Clear applied fixes
-      this.availableFixes.update(fixes =>
-        fixes.filter(f => !safeFixes.some(sf => sf.id === f.id))
-      );
+    try {
+      const { table: newTable, results } = this.cleaningService.applyFixes(this.table, safeFixes);
+
+      const successCount = results.filter(r => r.success).length;
+      console.log('Safe fixes applied:', successCount, 'of', safeFixes.length);
+
+      if (successCount > 0) {
+        // Clear applied fixes BEFORE emitting
+        this.availableFixes.update(fixes =>
+          fixes.filter(f => !safeFixes.some(sf => sf.id === f.id))
+        );
+
+        // Emit fix event for the combined result
+        this.applyFix.emit({
+          table: newTable,
+          fix: safeFixes[0], // First fix for reference
+          result: {
+            success: true,
+            changesCount: results.reduce((sum, r) => sum + r.changesCount, 0),
+          }
+        });
+
+        // Re-analyze quality after a delay
+        setTimeout(() => {
+          this.isApplyingFix.set(false);
+          if (this.table) {
+            this.analyzeQuality();
+          }
+        }, 200);
+      } else {
+        this.isApplyingFix.set(false);
+      }
+    } catch (err) {
+      console.error('Error applying safe fixes:', err);
+      this.error.set(`Error applying fixes: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      this.isApplyingFix.set(false);
     }
   }
 

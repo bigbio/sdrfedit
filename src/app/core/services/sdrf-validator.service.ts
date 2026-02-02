@@ -135,6 +135,15 @@ export class SdrfValidatorService {
     errors.push(...structuralErrors.filter((e) => e.type === 'error'));
     warnings.push(...structuralErrors.filter((e) => e.type === 'warning'));
 
+    // 6. Validate whitespace issues
+    const whitespaceErrors = this.validateWhitespace(table);
+    warnings.push(...whitespaceErrors);
+
+    // 7. Validate factor-characteristic relationships
+    const factorErrors = this.validateFactorCharacteristicRelations(table);
+    warnings.push(...factorErrors.filter((e) => e.type === 'warning'));
+    errors.push(...factorErrors.filter((e) => e.type === 'error'));
+
     // Build result
     result.errors = errors;
     result.warnings = warnings;
@@ -523,6 +532,192 @@ export class SdrfValidatorService {
     }
 
     return errors;
+  }
+
+  /**
+   * Validates factor value columns against corresponding characteristics columns.
+   * Factor values should reference values that exist in the corresponding characteristics column.
+   */
+  private validateFactorCharacteristicRelations(table: SdrfTable): ValidationError[] {
+    const errors: ValidationError[] = [];
+
+    // Find all factor value columns
+    const factorColumns = table.columns.filter((c) =>
+      c.name.toLowerCase().startsWith('factor value[')
+    );
+
+    // Build a map of characteristics columns
+    const characteristicsMap = new Map<string, SdrfColumn>();
+    for (const col of table.columns) {
+      const match = col.name.toLowerCase().match(/^characteristics\[(.+)\]$/);
+      if (match) {
+        characteristicsMap.set(match[1].toLowerCase(), col);
+      }
+    }
+
+    for (const factorCol of factorColumns) {
+      // Extract the factor name (e.g., "factor value[disease]" -> "disease")
+      const match = factorCol.name.toLowerCase().match(/^factor value\[(.+)\]$/);
+      if (!match) continue;
+
+      const factorName = match[1].toLowerCase();
+      const correspondingChar = characteristicsMap.get(factorName);
+
+      if (!correspondingChar) {
+        // Factor value without corresponding characteristics - this is a warning
+        errors.push(
+          createValidationWarning(
+            'FACTOR_MISSING_CHARACTERISTIC',
+            `Factor value column '${factorCol.name}' has no corresponding 'characteristics[${factorName}]' column`,
+            { column: factorCol.name }
+          )
+        );
+        continue;
+      }
+
+      // Get all values from both columns
+      const factorValues = this.getAllValuesForColumn(factorCol, table.sampleCount);
+      const charValues = this.getAllValuesForColumn(correspondingChar, table.sampleCount);
+
+      // Get unique characteristic values (normalize for comparison)
+      const charValueSet = new Set(
+        charValues
+          .filter((v) => v && v.toLowerCase() !== 'not available' && v.toLowerCase() !== 'not applicable')
+          .map((v) => v.toLowerCase().trim())
+      );
+
+      // Check each factor value exists in characteristics
+      const reportedMismatches = new Set<string>();
+      for (let sampleIdx = 0; sampleIdx < factorValues.length; sampleIdx++) {
+        const factorValue = factorValues[sampleIdx];
+        if (!factorValue || factorValue.toLowerCase() === 'not available' || factorValue.toLowerCase() === 'not applicable') {
+          continue;
+        }
+
+        const normalizedFactor = factorValue.toLowerCase().trim();
+        if (!charValueSet.has(normalizedFactor) && !reportedMismatches.has(normalizedFactor)) {
+          reportedMismatches.add(normalizedFactor);
+          errors.push(
+            createValidationWarning(
+              'FACTOR_CHARACTERISTIC_MISMATCH',
+              `Factor value '${factorValue}' in '${factorCol.name}' not found in '${correspondingChar.name}'`,
+              {
+                column: factorCol.name,
+                value: factorValue,
+                row: sampleIdx + 1,
+                suggestion: `Ensure '${factorValue}' is present in 'characteristics[${factorName}]'`,
+              }
+            )
+          );
+        }
+      }
+    }
+
+    return errors;
+  }
+
+  /**
+   * Gets all values for a column across all samples.
+   */
+  private getAllValuesForColumn(column: SdrfColumn, sampleCount: number): string[] {
+    const values: string[] = [];
+
+    // If column has a single value for all samples
+    if (column.value && column.modifiers.length === 0) {
+      for (let i = 0; i < sampleCount; i++) {
+        values.push(column.value);
+      }
+      return values;
+    }
+
+    // Use getValueForSample if modifiers exist
+    for (let sampleIdx = 1; sampleIdx <= sampleCount; sampleIdx++) {
+      const value = getValueForSample(column, sampleIdx);
+      values.push(value);
+    }
+
+    return values;
+  }
+
+  /**
+   * Validates whitespace issues in values.
+   * Checks for leading/trailing whitespace which can cause issues with ontology matching.
+   */
+  private validateWhitespace(table: SdrfTable): ValidationError[] {
+    const warnings: ValidationError[] = [];
+
+    for (let colIdx = 0; colIdx < table.columns.length; colIdx++) {
+      const column = table.columns[colIdx];
+
+      // Check column-level value
+      if (column.value) {
+        const trimmed = column.value.trim();
+        if (column.value !== trimmed) {
+          if (trimmed === '') {
+            warnings.push(
+              createValidationWarning(
+                'EMPTY_VALUE_WITH_WHITESPACE',
+                `Column '${column.name}' has value with only whitespace`,
+                { column: column.name, columnIndex: colIdx, value: column.value }
+              )
+            );
+          } else {
+            warnings.push(
+              createValidationWarning(
+                'LEADING_TRAILING_WHITESPACE',
+                `Column '${column.name}' has leading/trailing whitespace in value '${column.value}'`,
+                {
+                  column: column.name,
+                  columnIndex: colIdx,
+                  value: column.value,
+                  suggestion: `Trim to '${trimmed}'`,
+                }
+              )
+            );
+          }
+        }
+      }
+
+      // Check modifier values
+      for (const modifier of column.modifiers) {
+        if (modifier.value) {
+          const trimmed = modifier.value.trim();
+          if (modifier.value !== trimmed) {
+            const samples = modifier.samples;
+            if (trimmed === '') {
+              warnings.push(
+                createValidationWarning(
+                  'EMPTY_VALUE_WITH_WHITESPACE',
+                  `Column '${column.name}' has value with only whitespace for samples ${samples}`,
+                  {
+                    column: column.name,
+                    columnIndex: colIdx,
+                    value: modifier.value,
+                    row: parseInt(samples.split('-')[0]) || 1,
+                  }
+                )
+              );
+            } else {
+              warnings.push(
+                createValidationWarning(
+                  'LEADING_TRAILING_WHITESPACE',
+                  `Column '${column.name}' has leading/trailing whitespace in '${modifier.value}' for samples ${samples}`,
+                  {
+                    column: column.name,
+                    columnIndex: colIdx,
+                    value: modifier.value,
+                    row: parseInt(samples.split('-')[0]) || 1,
+                    suggestion: `Trim to '${trimmed}'`,
+                  }
+                )
+              );
+            }
+          }
+        }
+      }
+    }
+
+    return warnings;
   }
 
   /**

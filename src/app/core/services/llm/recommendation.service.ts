@@ -3,6 +3,7 @@
  *
  * Main service for generating LLM-based recommendations for SDRF files.
  * Orchestrates context building, prompt generation, and response parsing.
+ * Now integrates with SuggestionEnrichmentService for OLS validation.
  */
 
 import {
@@ -18,6 +19,12 @@ import {
   createRecommendationSummary,
   generateRecommendationId,
 } from '../../models/llm';
+import {
+  ActionableSuggestion,
+  RawLlmSuggestion,
+  EnrichmentProgress,
+  createSuggestionSummary,
+} from '../../models/actionable-suggestion';
 import { SdrfTable } from '../../models/sdrf-table';
 import { ILlmProvider } from './providers/base-provider';
 import { OpenAIProvider } from './providers/openai-provider';
@@ -25,6 +32,12 @@ import { ContextBuilderService, YamlTemplate } from './context-builder.service';
 import { PromptService, QualityIssueForPrompt } from './prompt.service';
 import { LlmSettingsService, llmSettingsService } from './settings.service';
 import { ColumnQualityService, TableQualityResult, ColumnQuality } from '../column-quality.service';
+import {
+  SuggestionEnrichmentService,
+  suggestionEnrichmentService,
+} from './suggestion-enrichment.service';
+import { SuggestionStateService, suggestionStateService } from '../suggestion-state.service';
+import { TableStateService, tableStateService } from '../table-state.service';
 
 /**
  * Cache entry for recommendations.
@@ -64,6 +77,43 @@ export interface EnhancedRecommendationResult extends RecommendationResult {
 }
 
 /**
+ * Result with actionable suggestions (OLS-validated).
+ */
+export interface ActionableRecommendationResult {
+  /** Enriched actionable suggestions */
+  suggestions: ActionableSuggestion[];
+
+  /** Quality analysis of all columns */
+  qualityAnalysis?: TableQualityResult;
+
+  /** Raw LLM response for debugging */
+  rawResponse?: string;
+
+  /** Timestamp of analysis */
+  timestamp: Date;
+
+  /** Provider used for analysis */
+  provider: LlmProviderType;
+
+  /** Model used for analysis */
+  model: string;
+
+  /** Number of suggestions that were OLS validated */
+  olsValidatedCount: number;
+
+  /** Number of suggestions that matched OLS exactly */
+  olsMatchedCount: number;
+}
+
+/**
+ * Progress update during analysis.
+ */
+export type AnalysisProgress =
+  | { type: 'streaming'; content: string }
+  | { type: 'parsing'; message: string }
+  | EnrichmentProgress;
+
+/**
  * Recommendation Service
  *
  * Generates AI-powered recommendations for improving SDRF files.
@@ -77,6 +127,9 @@ export class RecommendationService {
   private promptService: PromptService;
   private settingsService: LlmSettingsService;
   private qualityService: ColumnQualityService;
+  private enrichmentService: SuggestionEnrichmentService;
+  private suggestionState: SuggestionStateService;
+  private tableState: TableStateService;
 
   constructor(
     config: RecommendationServiceConfig = {},
@@ -87,6 +140,9 @@ export class RecommendationService {
     this.promptService = new PromptService(this.contextBuilder);
     this.settingsService = settingsService || llmSettingsService;
     this.qualityService = new ColumnQualityService();
+    this.enrichmentService = suggestionEnrichmentService;
+    this.suggestionState = suggestionStateService;
+    this.tableState = tableStateService;
   }
 
   // ============ Public API ============
@@ -281,6 +337,184 @@ export class RecommendationService {
       provider: config.provider,
       model: config.model,
     };
+  }
+
+  // ============ Actionable Suggestions API ============
+
+  /**
+   * Analyzes SDRF and returns actionable suggestions with OLS validation.
+   * This is the new recommended method that integrates OLS validation.
+   */
+  async analyzeActionable(
+    table: SdrfTable,
+    focusAreas: AnalysisFocusArea[] = ['all'],
+    template?: YamlTemplate
+  ): Promise<ActionableRecommendationResult> {
+    const provider = await this.getActiveProvider();
+    const config = this.settingsService.getActiveProviderConfig();
+
+    if (!config) {
+      throw new LlmError('No LLM provider configured', 'NOT_CONFIGURED');
+    }
+
+    // Update table state for staleness tracking
+    this.tableState.updateState(table);
+
+    // Perform quality analysis
+    const qualityAnalysis = this.qualityService.analyzeTable(table);
+    const qualityIssues = this.promptService.convertQualityToPromptIssues(
+      qualityAnalysis.columns
+    );
+
+    // Build context and messages
+    const context = this.contextBuilder.buildContext(table, focusAreas, template);
+    const messages = this.promptService.buildAnalysisMessages(
+      context,
+      undefined,
+      qualityIssues
+    );
+
+    // Call LLM
+    const response = await provider.complete(messages);
+
+    // Parse raw recommendations
+    const rawSuggestions = this.parseRawSuggestions(response.content, table);
+
+    // Enrich with OLS validation
+    const suggestions = await this.enrichmentService.enrichRecommendations(
+      this.convertToSdrfRecommendations(rawSuggestions, table),
+      table
+    );
+
+    // Store in suggestion state
+    this.suggestionState.addSuggestions(suggestions, 'analysis', true);
+
+    // Calculate statistics
+    const olsValidatedCount = suggestions.filter(
+      s => s.validation.olsValidated
+    ).length;
+    const olsMatchedCount = suggestions.filter(
+      s => s.validation.olsMatch !== undefined
+    ).length;
+
+    return {
+      suggestions,
+      qualityAnalysis,
+      rawResponse: response.content,
+      timestamp: new Date(),
+      provider: config.provider,
+      model: config.model,
+      olsValidatedCount,
+      olsMatchedCount,
+    };
+  }
+
+  /**
+   * Analyzes SDRF with streaming and OLS validation.
+   * Yields progress updates including streaming content and enrichment progress.
+   */
+  async *analyzeActionableStreaming(
+    table: SdrfTable,
+    focusAreas: AnalysisFocusArea[] = ['all'],
+    template?: YamlTemplate
+  ): AsyncGenerator<AnalysisProgress, ActionableRecommendationResult, unknown> {
+    const provider = await this.getActiveProvider();
+    const config = this.settingsService.getActiveProviderConfig();
+
+    if (!config) {
+      throw new LlmError('No LLM provider configured', 'NOT_CONFIGURED');
+    }
+
+    // Update table state
+    this.tableState.updateState(table);
+
+    // Quality analysis
+    const qualityAnalysis = this.qualityService.analyzeTable(table);
+    const qualityIssues = this.promptService.convertQualityToPromptIssues(
+      qualityAnalysis.columns
+    );
+
+    // Build context and messages
+    const context = this.contextBuilder.buildContext(table, focusAreas, template);
+    const messages = this.promptService.buildAnalysisMessages(
+      context,
+      undefined,
+      qualityIssues
+    );
+
+    // Stream LLM response
+    let fullContent = '';
+    if (provider.supportsStreaming) {
+      for await (const chunk of provider.stream(messages)) {
+        fullContent += chunk.content;
+        yield { type: 'streaming', content: chunk.content };
+      }
+    } else {
+      const response = await provider.complete(messages);
+      fullContent = response.content;
+      yield { type: 'streaming', content: fullContent };
+    }
+
+    // Parse recommendations
+    yield { type: 'parsing', message: 'Parsing recommendations...' };
+    const rawSuggestions = this.parseRawSuggestions(fullContent, table);
+
+    // Enrich with OLS validation (with progress)
+    const suggestions: ActionableSuggestion[] = [];
+    for await (const progress of this.enrichmentService.enrichSuggestionsStreaming(
+      rawSuggestions,
+      table,
+      'analysis'
+    )) {
+      if (progress.type === 'progress') {
+        yield progress;
+      } else {
+        suggestions.push(...progress.suggestions);
+      }
+    }
+
+    // Store in suggestion state
+    this.suggestionState.addSuggestions(suggestions, 'analysis', true);
+
+    // Calculate statistics
+    const olsValidatedCount = suggestions.filter(
+      s => s.validation.olsValidated
+    ).length;
+    const olsMatchedCount = suggestions.filter(
+      s => s.validation.olsMatch !== undefined
+    ).length;
+
+    return {
+      suggestions,
+      qualityAnalysis,
+      rawResponse: fullContent,
+      timestamp: new Date(),
+      provider: config.provider,
+      model: config.model,
+      olsValidatedCount,
+      olsMatchedCount,
+    };
+  }
+
+  /**
+   * Gets the enrichment service for external use.
+   */
+  getEnrichmentService(): SuggestionEnrichmentService {
+    return this.enrichmentService;
+  }
+
+  /**
+   * Gets the suggestion state service.
+   */
+  getSuggestionState(): SuggestionStateService {
+    return this.suggestionState;
+  }
+
+  /**
+   * Gets the table state service.
+   */
+  getTableState(): TableStateService {
+    return this.tableState;
   }
 
   /**
@@ -626,6 +860,194 @@ export class RecommendationService {
         this.cache.delete(firstKey);
       }
     }
+  }
+
+  /**
+   * Parses raw suggestions from LLM response (before conversion).
+   */
+  private parseRawSuggestions(
+    content: string,
+    table: SdrfTable
+  ): RawLlmSuggestion[] {
+    try {
+      let parsed: any = null;
+
+      // Strategy 1: Extract from markdown code block
+      const jsonCodeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (jsonCodeBlockMatch) {
+        try {
+          parsed = JSON.parse(jsonCodeBlockMatch[1].trim());
+        } catch {
+          // Continue to next strategy
+        }
+      }
+
+      // Strategy 2: Try parsing the entire content as JSON
+      if (!parsed) {
+        try {
+          parsed = JSON.parse(content.trim());
+        } catch {
+          // Continue to next strategy
+        }
+      }
+
+      // Strategy 3: Find JSON object containing "recommendations" array
+      if (!parsed) {
+        const objectMatch = content.match(
+          /\{[\s\S]*?"recommendations"\s*:\s*\[[\s\S]*?\][\s\S]*?\}/
+        );
+        if (objectMatch) {
+          try {
+            parsed = JSON.parse(objectMatch[0]);
+          } catch {
+            // Continue to next strategy
+          }
+        }
+      }
+
+      // Strategy 4: Find any JSON array
+      if (!parsed) {
+        const arrayMatch = content.match(
+          /\[[\s\S]*?\{[\s\S]*?"column"[\s\S]*?\}[\s\S]*?\]/
+        );
+        if (arrayMatch) {
+          try {
+            parsed = JSON.parse(arrayMatch[0]);
+          } catch {
+            // Continue to next strategy
+          }
+        }
+      }
+
+      // Strategy 5: Try to fix common JSON issues
+      if (!parsed) {
+        try {
+          let cleaned = content.replace(/^[^{[]*/, '');
+          cleaned = cleaned.replace(/[^}\]]*$/, '');
+          cleaned = cleaned.replace(/,\s*([\]}])/g, '$1');
+          parsed = JSON.parse(cleaned);
+        } catch {
+          console.warn('Failed to parse suggestions JSON after all strategies');
+          return [];
+        }
+      }
+
+      // Extract recommendations array
+      let rawRecs: any[];
+      if (Array.isArray(parsed)) {
+        rawRecs = parsed;
+      } else if (parsed && Array.isArray(parsed.recommendations)) {
+        rawRecs = parsed.recommendations;
+      } else {
+        console.warn('Could not find recommendations array in response');
+        return [];
+      }
+
+      // Convert to RawLlmSuggestion format
+      const suggestions: RawLlmSuggestion[] = [];
+      for (const raw of rawRecs) {
+        if (raw.column && raw.suggestedValue) {
+          suggestions.push({
+            type: raw.type || 'fill_value',
+            column: raw.column,
+            columnIndex: raw.columnIndex,
+            sampleIndices: raw.sampleIndices,
+            currentValue: raw.currentValue,
+            suggestedValue: String(raw.suggestedValue),
+            confidence: raw.confidence,
+            reasoning: raw.reasoning,
+            ontologyId: raw.ontologyId,
+            ontologyLabel: raw.ontologyLabel,
+          });
+        }
+      }
+
+      console.log(`Parsed ${suggestions.length} raw suggestions from LLM response`);
+      return suggestions;
+    } catch (error) {
+      console.error('Failed to parse raw suggestions:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Converts raw suggestions to SdrfRecommendation format for backward compatibility.
+   */
+  private convertToSdrfRecommendations(
+    rawSuggestions: RawLlmSuggestion[],
+    table: SdrfTable
+  ): SdrfRecommendation[] {
+    const recommendations: SdrfRecommendation[] = [];
+
+    for (const raw of rawSuggestions) {
+      // Find column index
+      let columnIndex = raw.columnIndex;
+      if (typeof columnIndex !== 'number') {
+        columnIndex = table.columns.findIndex(
+          c => c.name.toLowerCase() === raw.column.toLowerCase()
+        );
+      }
+
+      if (columnIndex < 0 || columnIndex >= table.columns.length) {
+        // For add_column type, we allow non-existent columns
+        if (raw.type !== 'add_column') {
+          continue;
+        }
+        columnIndex = table.columns.length; // Will be the new column index
+      }
+
+      // Validate sample indices
+      let sampleIndices = raw.sampleIndices || [];
+      if (!Array.isArray(sampleIndices)) {
+        sampleIndices = [sampleIndices];
+      }
+      sampleIndices = sampleIndices.filter(
+        (i: any) => typeof i === 'number' && i >= 1 && i <= table.sampleCount
+      );
+
+      // Default to all samples if none specified
+      if (sampleIndices.length === 0) {
+        sampleIndices = Array.from(
+          { length: table.sampleCount },
+          (_, i) => i + 1
+        );
+      }
+
+      // Validate type
+      const validTypes: RecommendationType[] = [
+        'fill_value',
+        'correct_value',
+        'ontology_suggestion',
+        'consistency_fix',
+        'add_column',
+      ];
+      const type = validTypes.includes(raw.type as RecommendationType)
+        ? (raw.type as RecommendationType)
+        : 'fill_value';
+
+      // Validate confidence
+      const validConfidences: RecommendationConfidence[] = ['high', 'medium', 'low'];
+      const confidence = validConfidences.includes(raw.confidence as RecommendationConfidence)
+        ? (raw.confidence as RecommendationConfidence)
+        : 'medium';
+
+      recommendations.push({
+        id: generateRecommendationId(),
+        type,
+        column: raw.column,
+        columnIndex,
+        sampleIndices,
+        currentValue: raw.currentValue,
+        suggestedValue: raw.suggestedValue,
+        confidence,
+        reasoning: raw.reasoning || 'No explanation provided',
+        applied: false,
+        ontologyId: raw.ontologyId,
+        ontologyLabel: raw.ontologyLabel,
+      });
+    }
+
+    return recommendations;
   }
 }
 

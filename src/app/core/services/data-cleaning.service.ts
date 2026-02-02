@@ -308,7 +308,9 @@ export class DataCleaningService {
       c => c.name.toLowerCase() === 'characteristics[disease]'
     );
 
-    if (!diseaseColumn) return null;
+    if (!diseaseColumn) {
+      return null;
+    }
 
     const affectedSamples: number[] = [];
     const preview: Array<{ before: string; after: string; sampleIndex: number }> = [];
@@ -479,6 +481,7 @@ export class DataCleaningService {
    */
   private applyReservedWordFix(table: SdrfTable, fix: AutoFix): { table: SdrfTable; result: FixResult } {
     const changes: Array<{ column: string; sampleIndex: number; before: string; after: string }> = [];
+
     const newColumns = table.columns.map(column => {
       if (column.name.toLowerCase() !== fix.column.toLowerCase()) {
         return column;
@@ -492,6 +495,7 @@ export class DataCleaningService {
 
         if (normalized === 'control' || normalized === 'healthy') {
           this.setValueForSample(newColumn, i, 'normal', table);
+
           changes.push({
             column: column.name,
             sampleIndex: i,
@@ -675,9 +679,27 @@ export class DataCleaningService {
     // If the new value equals the default value, we might need to remove from modifiers
     if (newValue === column.value) {
       // Remove this sample from any modifier that covers it
-      column.modifiers = column.modifiers.filter(m => !isSampleInRange(sampleIndex, m.samples));
+      column.modifiers = column.modifiers.map(m => {
+        if (isSampleInRange(sampleIndex, m.samples)) {
+          return { ...m, samples: this.removeSampleFromRange(m.samples, sampleIndex) };
+        }
+        return m;
+      }).filter(m => m.samples.length > 0);
       return;
     }
+
+    // ALWAYS remove from any existing modifiers first (except the one we're adding to)
+    column.modifiers = column.modifiers.map(m => {
+      // Don't remove from the modifier we'll be adding to
+      if (m.value === newValue) {
+        return m;
+      }
+      // Remove this sample from other modifiers
+      if (isSampleInRange(sampleIndex, m.samples)) {
+        return { ...m, samples: this.removeSampleFromRange(m.samples, sampleIndex) };
+      }
+      return m;
+    }).filter(m => m.samples.length > 0);
 
     // Check if there's already a modifier with this value
     const existingModifier = column.modifiers.find(m => m.value === newValue);
@@ -686,14 +708,6 @@ export class DataCleaningService {
       // Add this sample to the existing modifier's range
       existingModifier.samples = this.addSampleToRange(existingModifier.samples, sampleIndex);
     } else {
-      // Remove from any existing modifiers first
-      column.modifiers = column.modifiers.map(m => {
-        if (isSampleInRange(sampleIndex, m.samples)) {
-          return { ...m, samples: this.removeSampleFromRange(m.samples, sampleIndex) };
-        }
-        return m;
-      }).filter(m => m.samples.length > 0);
-
       // Add new modifier
       column.modifiers.push({
         samples: String(sampleIndex),

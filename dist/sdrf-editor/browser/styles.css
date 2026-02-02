@@ -1,1 +1,54 @@
-*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:#c1c1c1 #f1f1f1}html,body{margin:0;padding:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Oxygen,Ubuntu,Cantarell,sans-serif;font-size:14px;line-height:1.5;color:#333;background:#fff}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:#f1f1f1}::-webkit-scrollbar-thumb{background:#c1c1c1;border-radius:4px}::-webkit-scrollbar-thumb:hover{background:#a1a1a1}:focus-visible{outline:2px solid #2196f3;outline-offset:2px}button,input,select,textarea{font-family:inherit}
+/* src/styles.css */
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: #c1c1c1 #f1f1f1;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #333;
+  background: #fff;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+:focus-visible {
+  outline: 2px solid #2196f3;
+  outline-offset: 2px;
+}
+button {
+  font-family: inherit;
+}
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+/* angular:styles/global:styles */
+/*# sourceMappingURL=styles.css.map */
