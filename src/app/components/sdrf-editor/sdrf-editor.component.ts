@@ -74,7 +74,7 @@ const ROW_HEIGHT = 32;
 const BUFFER_ROWS = 10;
 
 @Component({
-  selector: 'sdrf-editor',
+  selector: 'sdrf-editor-table',
   standalone: true,
   imports: [CommonModule, FormsModule, SdrfCellEditorComponent, SdrfColumnStatsComponent, SdrfBulkToolbarComponent, SdrfFilterBarComponent, SdrfRecommendPanelComponent, LlmSettingsDialogComponent, SdrfWizardComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
