@@ -3,9 +3,12 @@
  *
  * Provides sdrf-pipelines validation by running Python code in the browser
  * via Pyodide (WebAssembly). Uses a Web Worker to avoid blocking the UI.
+ *
+ * Falls back to the EBI PRIDE SDRF Validator API when Pyodide fails.
  */
 
 import { Injectable, signal, computed } from '@angular/core';
+import { SdrfApiValidatorService, sdrfApiValidatorService } from './sdrf-api-validator.service';
 
 /**
  * Validation error from sdrf-pipelines
@@ -53,14 +56,21 @@ export class PyodideValidatorService {
     reject: (error: Error) => void;
   }>();
 
+  // API fallback service
+  private apiValidator: SdrfApiValidatorService = sdrfApiValidatorService;
+
   // State signals
   readonly state = signal<PyodideState>('not-loaded');
   readonly loadProgress = signal<string>('');
   readonly availableTemplates = signal<string[]>([]);
   readonly lastError = signal<string | null>(null);
 
+  // API fallback state
+  readonly usingApiFallback = signal(false);
+  readonly apiAvailable = signal<boolean | null>(null);
+
   // Computed signals
-  readonly isReady = computed(() => this.state() === 'ready');
+  readonly isReady = computed(() => this.state() === 'ready' || this.usingApiFallback());
   readonly isLoading = computed(() => this.state() === 'loading');
 
   /**
@@ -136,6 +146,35 @@ export class PyodideValidatorService {
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      console.warn('Pyodide initialization failed:', errorMessage);
+
+      // Try to fall back to API
+      console.log('Attempting to use SDRF Validator API as fallback...');
+      this.loadProgress.set('Pyodide failed, checking API...');
+
+      try {
+        const apiHealthy = await this.apiValidator.checkHealth();
+        this.apiAvailable.set(apiHealthy);
+
+        if (apiHealthy) {
+          console.log('SDRF Validator API is available, using as fallback');
+          this.usingApiFallback.set(true);
+          this.state.set('not-loaded'); // Keep state as not-loaded but fallback is active
+          this.loadProgress.set('Using SDRF Validator API (Pyodide unavailable)');
+          this.lastError.set(`Pyodide failed: ${errorMessage}. Using API fallback.`);
+
+          // Load templates from API
+          const templates = await this.apiValidator.getTemplates();
+          this.availableTemplates.set(templates);
+
+          // Don't throw - we have a working fallback
+          return;
+        }
+      } catch (apiError) {
+        console.warn('API fallback also failed:', apiError);
+      }
+
+      // Both Pyodide and API failed
       this.state.set('error');
       this.lastError.set(errorMessage);
       this.loadProgress.set(`Error: ${errorMessage}`);
@@ -144,15 +183,37 @@ export class PyodideValidatorService {
   }
 
   /**
-   * Load list of available templates from sdrf-pipelines
+   * Load list of available templates from sdrf-pipelines or API
    */
   private async loadTemplates(): Promise<void> {
+    // If using API fallback, get templates from API
+    if (this.usingApiFallback()) {
+      try {
+        const templates = await this.apiValidator.getTemplates();
+        this.availableTemplates.set(templates);
+        return;
+      } catch (error) {
+        console.warn('Failed to load templates from API:', error);
+      }
+    }
+
+    // Try Pyodide
     try {
       const templates = await this.sendMessage<string[]>('get-templates', {});
       this.availableTemplates.set(templates);
     } catch (error) {
-      console.warn('Failed to load templates:', error);
-      // Set default templates as fallback
+      console.warn('Failed to load templates from Pyodide:', error);
+
+      // Try API fallback
+      try {
+        const templates = await this.apiValidator.getTemplates();
+        this.availableTemplates.set(templates);
+        return;
+      } catch (apiError) {
+        console.warn('Failed to load templates from API:', apiError);
+      }
+
+      // Set default templates as last resort
       this.availableTemplates.set([
         'default',
         'human',
@@ -165,24 +226,75 @@ export class PyodideValidatorService {
   }
 
   /**
-   * Validate SDRF content against specified templates
+   * Validate SDRF content against specified templates.
+   * Falls back to API if Pyodide is not available.
    */
   async validate(
     sdrfTsv: string,
     templates: string[],
     options: { skipOntology?: boolean } = {}
   ): Promise<ValidationError[]> {
-    if (!this.isReady()) {
-      throw new Error('Pyodide not initialized. Call initialize() first.');
+    // If using API fallback, validate via API
+    if (this.usingApiFallback()) {
+      console.log('Using API fallback for validation');
+      return this.apiValidator.validate(sdrfTsv, templates, {
+        skipOntology: options.skipOntology ?? true,
+      });
     }
 
-    const errors = await this.sendMessage<ValidationError[]>('validate', {
-      sdrf: sdrfTsv,
-      templates,
-      skipOntology: options.skipOntology ?? true
-    });
+    // If Pyodide is not ready, try API fallback
+    if (!this.isReady()) {
+      console.log('Pyodide not ready, attempting API fallback');
+      return this.validateWithApiFallback(sdrfTsv, templates, options);
+    }
 
-    return errors;
+    // Try Pyodide validation first
+    try {
+      const errors = await this.sendMessage<ValidationError[]>('validate', {
+        sdrf: sdrfTsv,
+        templates,
+        skipOntology: options.skipOntology ?? true
+      });
+
+      return errors;
+    } catch (error) {
+      // Pyodide validation failed, try API fallback
+      console.warn('Pyodide validation failed, falling back to API:', error);
+      return this.validateWithApiFallback(sdrfTsv, templates, options);
+    }
+  }
+
+  /**
+   * Validate using the API as a fallback
+   */
+  private async validateWithApiFallback(
+    sdrfTsv: string,
+    templates: string[],
+    options: { skipOntology?: boolean } = {}
+  ): Promise<ValidationError[]> {
+    try {
+      // Check if API is available
+      const apiHealthy = await this.apiValidator.checkHealth();
+      this.apiAvailable.set(apiHealthy);
+
+      if (!apiHealthy) {
+        throw new Error('SDRF Validator API is not available');
+      }
+
+      console.log('Using SDRF Validator API for validation');
+      this.loadProgress.set('Using SDRF Validator API...');
+
+      const errors = await this.apiValidator.validate(sdrfTsv, templates, {
+        skipOntology: options.skipOntology ?? true,
+      });
+
+      this.loadProgress.set('Validation complete (via API)');
+      return errors;
+    } catch (apiError) {
+      const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
+      this.lastError.set(`Validation failed: ${errorMessage}`);
+      throw new Error(`Both Pyodide and API validation failed: ${errorMessage}`);
+    }
   }
 
   /**
