@@ -38,6 +38,14 @@ export type ValidationErrorCode =
   | 'INVALID_POOL_REFERENCE'
   | 'POOL_SAMPLE_NOT_FOUND'
 
+  // Whitespace errors
+  | 'LEADING_TRAILING_WHITESPACE'
+  | 'EMPTY_VALUE_WITH_WHITESPACE'
+
+  // Factor-characteristic errors
+  | 'FACTOR_CHARACTERISTIC_MISMATCH'
+  | 'FACTOR_MISSING_CHARACTERISTIC'
+
   // General
   | 'UNKNOWN_ERROR';
 

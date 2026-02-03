@@ -11,6 +11,8 @@ import {
   Output,
   EventEmitter,
   signal,
+  OnChanges,
+  SimpleChanges,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -104,7 +106,7 @@ export interface BulkColumnEditEvent {
   styles: [`
     .bulk-toolbar {
       display: none;
-      background: linear-gradient(135deg, #1a237e 0%, #283593 100%);
+      background: #1a237e;
       color: white;
       padding: 12px 16px;
       gap: 16px;
@@ -271,10 +273,11 @@ export interface BulkColumnEditEvent {
     }
   `],
 })
-export class SdrfBulkToolbarComponent {
+export class SdrfBulkToolbarComponent implements OnChanges {
   @Input() table: SdrfTable | null = null;
   @Input() selectedCount = 0;
   @Input() selectedSamples: Set<number> = new Set();
+  @Input() preselectedColumn: number | null = null;
 
   @Output() clearSelection = new EventEmitter<void>();
   @Output() bulkEdit = new EventEmitter<BulkColumnEditEvent>();
@@ -282,6 +285,13 @@ export class SdrfBulkToolbarComponent {
 
   selectedColumnIndex = -1;
   newValue = '';
+
+  ngOnChanges(changes: SimpleChanges): void {
+    // Auto-select column when preselectedColumn is set (from "Select all in column")
+    if (changes['preselectedColumn'] && this.preselectedColumn !== null) {
+      this.selectedColumnIndex = this.preselectedColumn;
+    }
+  }
 
   showConfirm = signal(false);
   confirmMessage = signal('');
