@@ -2044,6 +2044,8 @@ export class SdrfRecommendPanelComponent implements OnChanges, AfterViewInit {
   readonly pyodideLoadProgress = computed(() => this.pyodideService.loadProgress());
   readonly pyodideAvailableTemplates = computed(() => this.pyodideService.availableTemplates());
   readonly pyodideErrorCount = computed(() => this.pyodideErrors().filter(e => e.level === 'error').length);
+  readonly usingApiFallback = computed(() => this.pyodideService.usingApiFallback());
+  readonly apiAvailable = computed(() => this.pyodideService.apiAvailable());
   readonly pyodideWarningCount = computed(() => this.pyodideErrors().filter(e => e.level === 'warning').length);
   readonly pyodideLastError = computed(() => this.pyodideService.lastError());
 

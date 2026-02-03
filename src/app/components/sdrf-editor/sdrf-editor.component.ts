@@ -337,7 +337,9 @@ const BUFFER_ROWS = 10;
               <div class="validation-panel-header">
                 <div class="validation-title">
                   <h3>SDRF Validation</h3>
-                  @if (pyodideState() === 'loading') {
+                  @if (usingApiFallback()) {
+                    <span class="pyodide-status api-fallback" title="Using EBI PRIDE SDRF Validator API">API</span>
+                  } @else if (pyodideState() === 'loading') {
                     <span class="pyodide-status loading">{{ pyodideLoadProgress() }}</span>
                   } @else if (pyodideState() === 'ready') {
                     <span class="pyodide-status ready">Ready</span>
@@ -371,6 +373,8 @@ const BUFFER_ROWS = 10;
                   >
                     @if (pyodideValidating()) {
                       <span class="spinner-sm"></span> Validating...
+                    } @else if (usingApiFallback()) {
+                      Validate (API)
                     } @else if (pyodideState() === 'not-loaded') {
                       Load & Validate
                     } @else {
@@ -1163,6 +1167,7 @@ const BUFFER_ROWS = 10;
     .pyodide-status.loading { background: #fef3c7; color: #92400e; }
     .pyodide-status.ready { background: #d1fae5; color: #059669; }
     .pyodide-status.error { background: #fee2e2; color: #b91c1c; }
+    .pyodide-status.api-fallback { background: #dbeafe; color: #1e40af; }
 
     .validation-panel-body {
       padding: 12px 16px;
@@ -1786,6 +1791,10 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   pyodideAvailableTemplates = computed(() => this.pyodideService.availableTemplates());
   pyodideErrorCount = computed(() => this.pyodideErrors().filter(e => e.level === 'error').length);
   pyodideWarningCount = computed(() => this.pyodideErrors().filter(e => e.level === 'warning').length);
+
+  /** API fallback state */
+  usingApiFallback = computed(() => this.pyodideService.usingApiFallback());
+  apiAvailable = computed(() => this.pyodideService.apiAvailable());
 
   /** Context menu state */
   contextMenu = signal<{ x: number; y: number; row: number; col: number } | null>(null);
