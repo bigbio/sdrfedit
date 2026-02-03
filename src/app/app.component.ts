@@ -147,7 +147,7 @@ export class AppComponent implements OnInit {
   activeUrl = '';
 
   // Sample SDRF from proteomics-metadata-standard
-  readonly sampleUrl = 'https://raw.githubusercontent.com/bigbio/proteomics-metadata-standard/master/annotated-projects/PXD000612/sdrf.tsv';
+  readonly sampleUrl = 'https://raw.githubusercontent.com/bigbio/proteomics-metadata-standard/master/annotated-projects/PXD000070/PXD000070.sdrf.tsv';
 
   ngOnInit(): void {
     // Check for URL parameter to auto-load SDRF file

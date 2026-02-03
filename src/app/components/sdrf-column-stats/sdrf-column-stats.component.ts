@@ -12,6 +12,7 @@ import {
   EventEmitter,
   signal,
   computed,
+  effect,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -82,10 +83,16 @@ export interface BulkEditEvent {
             <span class="summary-item">
               <strong>{{ table?.sampleCount || 0 }}</strong> total samples
             </span>
+            @if (isComputing()) {
+              <span class="computing-indicator">
+                <span class="spinner"></span>
+                Processing...
+              </span>
+            }
           </div>
 
           <!-- Value List -->
-          <div class="value-list">
+          <div class="value-list" [class.computing]="isComputing()">
             @for (stat of uniqueValues(); track stat.value) {
               <div
                 class="value-item"
@@ -380,6 +387,33 @@ export interface BulkEditEvent {
     .quick-actions .btn {
       flex: 1;
     }
+
+    .computing-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: #1976d2;
+      margin-left: auto;
+    }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid #e3f2fd;
+      border-top-color: #1976d2;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .value-list.computing {
+      opacity: 0.6;
+      pointer-events: none;
+    }
   `],
 })
 export class SdrfColumnStatsComponent {
@@ -394,19 +428,44 @@ export class SdrfColumnStatsComponent {
   selectedColumnIndex = signal(0);
   editingValue = signal<string | null>(null);
   editNewValue = '';
+  isComputing = signal(false);
+  private cachedValues = signal<ValueStats[]>([]);
 
   selectedColumn = computed(() => {
     if (!this.table) return null;
     return this.table.columns[this.selectedColumnIndex()] || null;
   });
 
-  uniqueValues = computed<ValueStats[]>(() => {
-    const column = this.selectedColumn();
-    if (!column || !this.table) return [];
+  // Use cached values for display, computed asynchronously
+  uniqueValues = computed<ValueStats[]>(() => this.cachedValues());
 
+  constructor() {
+    // Recompute values when column changes, with loading indicator
+    effect(() => {
+      const column = this.selectedColumn();
+      const table = this.table;
+
+      if (!column || !table) {
+        this.cachedValues.set([]);
+        return;
+      }
+
+      // Show loading indicator
+      this.isComputing.set(true);
+
+      // Defer heavy computation to allow UI to update
+      setTimeout(() => {
+        const stats = this.computeUniqueValues(column, table);
+        this.cachedValues.set(stats);
+        this.isComputing.set(false);
+      }, 0);
+    });
+  }
+
+  private computeUniqueValues(column: SdrfColumn, table: SdrfTable): ValueStats[] {
     const valueMap = new Map<string, number[]>();
 
-    for (let i = 1; i <= this.table.sampleCount; i++) {
+    for (let i = 1; i <= table.sampleCount; i++) {
       const value = getValueForSample(column, i);
       if (!valueMap.has(value)) {
         valueMap.set(value, []);
@@ -419,7 +478,7 @@ export class SdrfColumnStatsComponent {
       stats.push({
         value,
         count: indices.length,
-        percentage: (indices.length / this.table.sampleCount) * 100,
+        percentage: (indices.length / table.sampleCount) * 100,
         sampleIndices: indices,
       });
     }
@@ -427,7 +486,7 @@ export class SdrfColumnStatsComponent {
     // Sort by count descending
     stats.sort((a, b) => b.count - a.count);
     return stats;
-  });
+  }
 
   onColumnChange(index: number): void {
     this.selectedColumnIndex.set(Number(index));

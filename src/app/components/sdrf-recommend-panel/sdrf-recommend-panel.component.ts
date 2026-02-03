@@ -18,6 +18,8 @@ import {
   computed,
   ChangeDetectionStrategy,
   OnChanges,
+  OnInit,
+  AfterViewInit,
   SimpleChanges,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
@@ -129,8 +131,14 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
         </div>
       </div>
 
-      <!-- Not Configured -->
-      @if (!isConfigured()) {
+      <!-- Initializing State -->
+      @if (isInitializing()) {
+        <div class="initializing-state">
+          <div class="initializing-spinner"></div>
+          <p>Initializing AI Assistant...</p>
+        </div>
+      } @else if (!isConfigured()) {
+        <!-- Not Configured -->
         <div class="empty-state">
           <p>Configure an AI provider to get started.</p>
           <button type="button" class="btn btn-primary" (click)="openSettings.emit()">
@@ -821,6 +829,34 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
       padding: 40px 20px;
       text-align: center;
       color: #6b7280;
+    }
+
+    .initializing-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 20px;
+      color: #6b7280;
+      gap: 16px;
+    }
+
+    .initializing-spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid #e5e7eb;
+      border-top-color: #6366f1;
+      border-radius: 50%;
+      animation: init-spin 0.8s linear infinite;
+    }
+
+    @keyframes init-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .initializing-state p {
+      font-size: 14px;
+      margin: 0;
     }
 
     .panel-tabs {
@@ -1834,8 +1870,12 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
 
   `],
 })
-export class SdrfRecommendPanelComponent implements OnChanges {
+export class SdrfRecommendPanelComponent implements OnChanges, AfterViewInit {
   @Input() table: SdrfTable | null = null;
+
+  /** Tracks whether the panel is still initializing */
+  readonly isInitializing = signal(true);
+  private hasInitialized = false;
 
   /** Input to receive a message to send to the chat from external components */
   @Input() set incomingChatMessage(message: string | null) {
@@ -1915,18 +1955,54 @@ export class SdrfRecommendPanelComponent implements OnChanges {
   readonly useActionableSuggestions = signal(true); // Toggle between old and new
 
   constructor() {
+    // Initialize lightweight services synchronously
     this.recommendationService = recommendationService;
     this.settingsService = llmSettingsService;
-    this.qualityService = new ColumnQualityService();
     this.cleaningService = dataCleaningService;
     this.examplesService = sdrfExamplesService;
     this.pyodideService = pyodideValidatorService;
-    this.aiWorker = new AiWorkerService();
     this.enrichmentService = suggestionEnrichmentService;
     this.suggestionState = suggestionStateService;
 
-    // Load examples index in background
-    this.loadExamplesIndex();
+    // Initialize heavier services lazily
+    this.qualityService = null as unknown as ColumnQualityService;
+    this.aiWorker = null as unknown as AiWorkerService;
+  }
+
+  ngAfterViewInit(): void {
+    // Defer heavy initialization to after view is rendered
+    // Use requestAnimationFrame to ensure UI is visible first
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        this.initializePanel();
+      }, 0);
+    });
+  }
+
+  private async initializePanel(): Promise<void> {
+    try {
+      // Initialize heavier services
+      this.qualityService = new ColumnQualityService();
+      this.aiWorker = new AiWorkerService();
+
+      // Load examples index in background (non-blocking)
+      this.loadExamplesIndex();
+
+      // Mark initialization as complete
+      this.hasInitialized = true;
+      this.isInitializing.set(false);
+
+      // If table is available, trigger quality analysis for small tables
+      if (this.table && this.table.sampleCount <= this.AUTO_ANALYZE_THRESHOLD) {
+        // Small delay to ensure UI is responsive
+        setTimeout(() => {
+          this.analyzeQuality();
+        }, 100);
+      }
+    } catch (err) {
+      console.error('Error initializing AI panel:', err);
+      this.isInitializing.set(false);
+    }
   }
 
   private async loadExamplesIndex(): Promise<void> {
@@ -2077,6 +2153,11 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['table']) {
+      // Skip if not yet initialized (will be handled by initializePanel)
+      if (!this.hasInitialized) {
+        return;
+      }
+
       // Skip reset if we're applying a fix (we'll re-analyze after)
       if (this.isApplyingFix()) {
         console.log('ngOnChanges: Skipping reset because fix is being applied');
@@ -2096,7 +2177,10 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
 
       // Auto-analyze quality when table changes (but skip for large tables)
       if (this.table && this.table.sampleCount <= this.AUTO_ANALYZE_THRESHOLD) {
-        this.analyzeQuality();
+        // Defer to prevent UI blocking
+        setTimeout(() => {
+          this.analyzeQuality();
+        }, 100);
       }
     }
   }

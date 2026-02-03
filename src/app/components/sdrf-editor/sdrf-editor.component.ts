@@ -211,7 +211,7 @@ const BUFFER_ROWS = 10;
                   <colgroup>
                     <col class="col-checkbox" />
                     <col class="col-rownum" />
-                    @for (column of table()!.columns; track column.name) {
+                    @for (column of table()!.columns; track $index) {
                       <col class="col-data" />
                     }
                   </colgroup>
@@ -227,7 +227,7 @@ const BUFFER_ROWS = 10;
                         />
                       </th>
                       <th class="row-header">#</th>
-                      @for (column of table()!.columns; track column.name; let colIdx = $index) {
+                      @for (column of table()!.columns; track $index; let colIdx = $index) {
                         <th
                           class="data-col"
                           [class.col-type-source]="getColumnTypeClass(column.name) === 'source'"
@@ -275,7 +275,7 @@ const BUFFER_ROWS = 10;
                         <td class="row-header" (click)="onRowHeaderClick(rowIndex, $event)">
                           {{ rowIndex }}
                         </td>
-                        @for (column of table()!.columns; track column.name; let colIdx = $index) {
+                        @for (column of table()!.columns; track $index; let colIdx = $index) {
                           <td
                             [class.selected]="isSelected(rowIndex, colIdx)"
                             [class.has-error]="hasCellError(rowIndex, colIdx)"
@@ -794,6 +794,36 @@ const BUFFER_ROWS = 10;
       overflow: auto;
       position: relative;
       min-height: 0;
+      /* Ensure scrollbars are always visible when content overflows */
+      overflow-y: scroll;
+      overflow-x: auto;
+    }
+
+    /* Custom scrollbar styling for the table container */
+    .sdrf-table-container::-webkit-scrollbar {
+      width: 12px;
+      height: 12px;
+    }
+
+    .sdrf-table-container::-webkit-scrollbar-track {
+      background: #f1f1f1;
+      border-radius: 6px;
+    }
+
+    .sdrf-table-container::-webkit-scrollbar-thumb {
+      background: #c1c1c1;
+      border-radius: 6px;
+      border: 2px solid #f1f1f1;
+    }
+
+    .sdrf-table-container::-webkit-scrollbar-thumb:hover {
+      background: #a1a1a1;
+    }
+
+    /* Firefox scrollbar styling */
+    .sdrf-table-container {
+      scrollbar-width: auto;
+      scrollbar-color: #c1c1c1 #f1f1f1;
     }
 
     .table-scroll-area {
@@ -803,7 +833,9 @@ const BUFFER_ROWS = 10;
     }
 
     .sdrf-table {
-      border-collapse: collapse;
+      /* Use separate borders for Firefox sticky header compatibility */
+      border-collapse: separate;
+      border-spacing: 0;
       font-size: 13px;
       table-layout: auto;
       width: max-content;
@@ -859,7 +891,9 @@ const BUFFER_ROWS = 10;
 
     .sdrf-table th,
     .sdrf-table td {
-      border: 1px solid #ddd;
+      /* Use border-left and border-bottom only to avoid double borders with border-collapse: separate */
+      border-left: 1px solid #ddd;
+      border-bottom: 1px solid #ddd;
       padding: 6px 8px;
       text-align: left;
       white-space: nowrap;
@@ -871,9 +905,28 @@ const BUFFER_ROWS = 10;
       box-sizing: border-box;
     }
 
+    /* First column needs left border */
+    .sdrf-table th:first-child,
+    .sdrf-table td:first-child {
+      border-left: 1px solid #ddd;
+    }
+
+    /* Last column needs right border */
+    .sdrf-table th:last-child,
+    .sdrf-table td:last-child {
+      border-right: 1px solid #ddd;
+    }
+
+    /* Header row needs top border */
+    .sdrf-table thead th {
+      border-top: 1px solid #ddd;
+    }
+
     .sdrf-table th {
       background: #f8f9fa;
       font-weight: 600;
+      /* Firefox sticky header border fix - use box-shadow for bottom edge */
+      box-shadow: inset 0 -1px 0 #ddd;
     }
 
     .sdrf-table th.required {
@@ -989,7 +1042,7 @@ const BUFFER_ROWS = 10;
 
     .cell-editor-popup {
       position: fixed;
-      z-index: 1000;
+      z-index: 500;
       background: white;
       border-radius: 8px;
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
@@ -3073,7 +3126,8 @@ How can I fix this?`;
   }
 
   /**
-   * Add a new column to the table.
+   * Add a new column to the table at the correct section position.
+   * SDRF column order: source_name → characteristics → comments → factor_value
    */
   addNewColumn(): void {
     const name = this.newColumnName().trim();
@@ -3093,22 +3147,77 @@ How can I fix this?`;
       type = 'factor_value';
     }
 
+    // Find the correct insertion position based on column type order
+    const insertPosition = this.findColumnInsertPosition(t.columns, type);
+
     const newColumn: SdrfColumn = {
       name,
       type,
-      columnPosition: t.columns.length,
+      columnPosition: insertPosition,
       value: '',
       modifiers: [],
       isRequired: false,
     };
 
+    // Insert column at the correct position and update positions
+    const newColumns = [...t.columns];
+    newColumns.splice(insertPosition, 0, newColumn);
+    // Update columnPosition for all columns after the insertion
+    for (let i = insertPosition; i < newColumns.length; i++) {
+      newColumns[i] = { ...newColumns[i], columnPosition: i };
+    }
+
     const newTable: SdrfTable = {
       ...t,
-      columns: [...t.columns, newColumn],
+      columns: newColumns,
     };
 
     this.table.set(newTable);
     this.closeAddColumnDialog();
+  }
+
+  /**
+   * Find the correct insertion position for a new column based on type.
+   * Order: source_name → characteristics → comments → factor_value → special
+   */
+  private findColumnInsertPosition(
+    columns: SdrfColumn[],
+    type: 'characteristics' | 'comment' | 'factor_value' | 'special'
+  ): number {
+    // Type priority order (lower = earlier in table)
+    const typePriority: Record<string, number> = {
+      'source_name': 0,
+      'characteristics': 1,
+      'comment': 2,
+      'factor_value': 3,
+      'special': 4,
+    };
+
+    const newTypePriority = typePriority[type] ?? 4;
+
+    // Find the last column of the same type
+    let lastSameTypeIndex = -1;
+    // Find the first column with higher priority (comes after this type)
+    let firstHigherPriorityIndex = columns.length;
+
+    for (let i = 0; i < columns.length; i++) {
+      const colType = columns[i].type;
+      const colPriority = typePriority[colType] ?? 4;
+
+      if (colType === type) {
+        lastSameTypeIndex = i;
+      } else if (colPriority > newTypePriority && firstHigherPriorityIndex === columns.length) {
+        firstHigherPriorityIndex = i;
+      }
+    }
+
+    // If we found columns of the same type, insert after the last one
+    if (lastSameTypeIndex >= 0) {
+      return lastSameTypeIndex + 1;
+    }
+
+    // Otherwise, insert before the first column of higher priority type
+    return firstHigherPriorityIndex;
   }
 
   /**

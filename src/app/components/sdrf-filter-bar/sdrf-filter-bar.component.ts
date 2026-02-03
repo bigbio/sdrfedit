@@ -11,6 +11,7 @@ import {
   EventEmitter,
   signal,
   computed,
+  effect,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -115,7 +116,12 @@ export interface FilterResult {
           }
           <button class="btn-link" (click)="clearFilters()">Clear all</button>
           <span class="filter-result">
-            {{ filterResult().matchingIndices.length }} of {{ filterResult().totalCount }} samples
+            @if (isFiltering()) {
+              <span class="filter-spinner"></span>
+              Filtering...
+            } @else {
+              {{ filterResult().matchingIndices.length }} of {{ filterResult().totalCount }} samples
+            }
           </span>
         </div>
       }
@@ -278,6 +284,22 @@ export interface FilterResult {
       font-size: 12px;
       color: #666;
       font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .filter-spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid #e3f2fd;
+      border-top-color: #1976d2;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
   `],
 })
@@ -295,29 +317,52 @@ export class SdrfFilterBarComponent {
   // Active filters
   filters = signal<FilterCondition[]>([]);
 
-  // Filter result
-  filterResult = computed<FilterResult>(() => {
-    if (!this.table) {
-      return { matchingIndices: [], totalCount: 0 };
-    }
+  // Loading state for filtering
+  isFiltering = signal(false);
+  private cachedFilterResult = signal<FilterResult>({ matchingIndices: [], totalCount: 0 });
 
-    const allFilters = this.filters();
-    if (allFilters.length === 0) {
-      // No filters - all rows match
-      const allIndices = Array.from({ length: this.table.sampleCount }, (_, i) => i + 1);
-      return { matchingIndices: allIndices, totalCount: this.table.sampleCount };
-    }
+  // Filter result (uses cached value)
+  filterResult = computed<FilterResult>(() => this.cachedFilterResult());
 
-    // Apply all filters (AND logic)
+  constructor() {
+    // Recompute filter results with loading indicator
+    effect(() => {
+      const allFilters = this.filters();
+      const table = this.table;
+
+      if (!table) {
+        this.cachedFilterResult.set({ matchingIndices: [], totalCount: 0 });
+        return;
+      }
+
+      if (allFilters.length === 0) {
+        // No filters - all rows match
+        const allIndices = Array.from({ length: table.sampleCount }, (_, i) => i + 1);
+        this.cachedFilterResult.set({ matchingIndices: allIndices, totalCount: table.sampleCount });
+        return;
+      }
+
+      // Show loading indicator for heavy computation
+      this.isFiltering.set(true);
+
+      // Defer computation to allow UI to update
+      setTimeout(() => {
+        const result = this.computeFilterResult(allFilters, table);
+        this.cachedFilterResult.set(result);
+        this.isFiltering.set(false);
+      }, 0);
+    });
+  }
+
+  private computeFilterResult(allFilters: FilterCondition[], table: SdrfTable): FilterResult {
     const matchingIndices: number[] = [];
-    for (let i = 1; i <= this.table.sampleCount; i++) {
+    for (let i = 1; i <= table.sampleCount; i++) {
       if (this.rowMatchesAllFilters(i, allFilters)) {
         matchingIndices.push(i);
       }
     }
-
-    return { matchingIndices, totalCount: this.table.sampleCount };
-  });
+    return { matchingIndices, totalCount: table.sampleCount };
+  }
 
   // Value suggestions for autocomplete
   valueSuggestions = computed<string[]>(() => {
