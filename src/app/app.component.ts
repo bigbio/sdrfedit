@@ -9,7 +9,7 @@ import { FormsModule } from '@angular/forms';
 import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.component';
 
 @Component({
-  selector: 'app-root',
+  selector: 'sdrf-editor',
   standalone: true,
   imports: [FormsModule, SdrfEditorComponent],
   template: `
@@ -37,11 +37,11 @@ import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.compon
         </div>
 
         <div class="editor-wrapper">
-          <sdrf-editor
+          <sdrf-editor-table
             [url]="activeUrl"
             (tableChange)="onTableChange($event)"
             (validationComplete)="onValidation($event)"
-          ></sdrf-editor>
+          ></sdrf-editor-table>
         </div>
       </main>
     </div>
