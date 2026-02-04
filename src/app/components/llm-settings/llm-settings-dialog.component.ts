@@ -154,6 +154,32 @@ interface ProviderOption {
           @if (selectedProvider() === 'ollama') {
             <div class="form-section">
               <label class="form-label">Ollama Status</label>
+
+              <!-- CORS Warning for remote hosts -->
+              @if (isRemoteHost()) {
+                <div class="cors-warning">
+                  <div class="warning-icon">⚠️</div>
+                  <div class="warning-content">
+                    <p><strong>CORS Restriction</strong></p>
+                    <p>
+                      You're running this app from <strong>{{ getHostname() }}</strong>.
+                      Browsers block requests from remote sites to localhost for security.
+                    </p>
+                    <p><strong>To use Ollama with this remote site:</strong></p>
+                    <ol>
+                      <li>
+                        Configure Ollama with CORS headers:
+                        <div class="install-commands">
+                          <code>OLLAMA_ORIGINS={{ getOrigin() }} ollama serve</code>
+                        </div>
+                      </li>
+                      <li>Or run this editor locally at <code class="inline-code">localhost</code></li>
+                      <li>Or use a cloud AI provider (OpenAI, Anthropic, Gemini)</li>
+                    </ol>
+                  </div>
+                </div>
+              }
+
               <div class="ollama-status">
                 @if (ollamaChecking()) {
                   <span class="status-checking">Checking connection...</span>
@@ -755,6 +781,49 @@ interface ProviderOption {
       font-family: ui-monospace, monospace;
       font-size: 12px;
     }
+
+    .cors-warning {
+      display: flex;
+      gap: 12px;
+      background: #fef3c7;
+      border: 2px solid #fbbf24;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .warning-icon {
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+
+    .warning-content {
+      flex: 1;
+      font-size: 13px;
+      color: #78350f;
+    }
+
+    .warning-content p {
+      margin: 0 0 10px 0;
+    }
+
+    .warning-content p:last-child {
+      margin-bottom: 0;
+    }
+
+    .warning-content strong {
+      color: #92400e;
+    }
+
+    .warning-content ol {
+      margin: 8px 0 0 0;
+      padding-left: 20px;
+    }
+
+    .warning-content li {
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
   `],
 })
 export class LlmSettingsDialogComponent implements OnInit {
@@ -1049,5 +1118,28 @@ export class LlmSettingsDialogComponent implements OnInit {
 
   refreshOllamaModels(): void {
     this.checkOllamaStatus();
+  }
+
+  /**
+   * Checks if the app is running on a remote host (not localhost).
+   */
+  isRemoteHost(): boolean {
+    if (typeof window === 'undefined') return false;
+    const hostname = window.location.hostname;
+    return !hostname.includes('localhost') && !hostname.includes('127.0.0.1');
+  }
+
+  /**
+   * Gets the current hostname.
+   */
+  getHostname(): string {
+    return typeof window !== 'undefined' ? window.location.hostname : '';
+  }
+
+  /**
+   * Gets the current origin for CORS configuration.
+   */
+  getOrigin(): string {
+    return typeof window !== 'undefined' ? window.location.origin : '';
   }
 }

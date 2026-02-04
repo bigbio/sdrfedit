@@ -40,6 +40,9 @@ import { SdrfFilterBarComponent, FilterResult } from '../sdrf-filter-bar/sdrf-fi
 import { SdrfRecommendPanelComponent, ApplyRecommendationEvent, BatchApplyEvent, ApplyFixEvent } from '../sdrf-recommend-panel/sdrf-recommend-panel.component';
 import { LlmSettingsDialogComponent } from '../llm-settings/llm-settings-dialog.component';
 import { SdrfWizardComponent } from '../sdrf-wizard/sdrf-wizard.component';
+import { ColumnEditorPanelComponent, BulkEditEvent as ColumnBulkEditEvent } from '../column-editor-panel/column-editor-panel.component';
+import { CacheRecoveryPanelComponent, RecoverCacheEvent } from '../cache-recovery-panel/cache-recovery-panel.component';
+import { TableCacheService, tableCacheService } from '../../core/services/table-cache.service';
 import { SdrfRecommendation } from '../../core/models/llm';
 import {
   PyodideValidatorService,
@@ -76,7 +79,7 @@ const BUFFER_ROWS = 10;
 @Component({
   selector: 'sdrf-editor-table',
   standalone: true,
-  imports: [CommonModule, FormsModule, SdrfCellEditorComponent, SdrfColumnStatsComponent, SdrfBulkToolbarComponent, SdrfFilterBarComponent, SdrfRecommendPanelComponent, LlmSettingsDialogComponent, SdrfWizardComponent],
+  imports: [CommonModule, FormsModule, SdrfCellEditorComponent, SdrfColumnStatsComponent, SdrfBulkToolbarComponent, SdrfFilterBarComponent, SdrfRecommendPanelComponent, LlmSettingsDialogComponent, SdrfWizardComponent, ColumnEditorPanelComponent, CacheRecoveryPanelComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="sdrf-editor" [class.loading]="loading()">
@@ -104,6 +107,11 @@ const BUFFER_ROWS = 10;
             <button class="btn btn-secondary" (click)="validate()">
               Validate
             </button>
+            @if (changeCount() > 0) {
+              <span class="unsaved-indicator" title="{{ changeCount() }} unsaved change(s)">
+                💾 {{ changeCount() }}
+              </span>
+            }
             <span class="toolbar-divider"></span>
             <button class="btn btn-secondary" (click)="addRowAtEnd()" title="Add a new row at the end">
               + Row
@@ -240,13 +248,22 @@ const BUFFER_ROWS = 10;
                           [title]="getColumnTooltip(column.name)"
                           (click)="onHeaderClick(colIdx, $event)"
                         >
-                          <span class="col-name">{{ column.name }}</span>
-                          @if (column.isRequired) {
-                            <span class="required-marker">*</span>
-                          }
-                          @if (sortColumn() === colIdx) {
-                            <span class="sort-indicator">{{ sortDirection() === 'asc' ? '▲' : '▼' }}</span>
-                          }
+                          <div class="col-header-content">
+                            <span class="col-name">{{ column.name }}</span>
+                            @if (column.isRequired) {
+                              <span class="required-marker">*</span>
+                            }
+                            @if (sortColumn() === colIdx) {
+                              <span class="sort-indicator">{{ sortDirection() === 'asc' ? '▲' : '▼' }}</span>
+                            }
+                            <button
+                              class="bulk-edit-btn"
+                              (click)="openColumnEditor(colIdx); $event.stopPropagation()"
+                              title="Bulk edit this column"
+                            >
+                              📝
+                            </button>
+                          </div>
                         </th>
                       }
                     </tr>
@@ -542,6 +559,15 @@ const BUFFER_ROWS = 10;
             ></sdrf-recommend-panel>
           </div>
         </div>
+
+        <!-- Column Editor Panel - Slide-in from right -->
+        <column-editor-panel
+          [isOpen]="showColumnEditor"
+          [table]="table"
+          [columnIndex]="columnEditorIndex"
+          (close)="closeColumnEditor()"
+          (applyBulkEdit)="onBulkEditColumn($event)"
+        ></column-editor-panel>
       } @else if (!loading() && !error()) {
         <div class="empty-state">
           <p>No SDRF file loaded</p>
@@ -588,6 +614,14 @@ const BUFFER_ROWS = 10;
           (complete)="onWizardComplete($event)"
           (cancel)="closeWizard()"
         />
+      }
+
+      <!-- Cache Recovery Panel -->
+      @if (showCacheRecovery()) {
+        <cache-recovery-panel
+          (recover)="onRecoverCache($event)"
+          (dismiss)="dismissCacheRecovery()"
+        ></cache-recovery-panel>
       }
     </div>
   `,
@@ -1428,6 +1462,36 @@ const BUFFER_ROWS = 10;
       display: inline;
     }
 
+    .col-header-content {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      justify-content: space-between;
+      width: 100%;
+    }
+
+    .bulk-edit-btn {
+      background: rgba(255, 255, 255, 0.9);
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      padding: 2px 6px;
+      font-size: 12px;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.2s, background 0.2s;
+      flex-shrink: 0;
+    }
+
+    .sdrf-table th:hover .bulk-edit-btn {
+      opacity: 1;
+    }
+
+    .bulk-edit-btn:hover {
+      background: #2196f3;
+      border-color: #2196f3;
+      transform: scale(1.1);
+    }
+
     /* Sample Accession (source name) - Green */
     .sdrf-table th.col-type-source { border-left-color: #4caf50; background: rgba(76, 175, 80, 0.05); }
 
@@ -1458,6 +1522,20 @@ const BUFFER_ROWS = 10;
       height: 24px;
       background: #ddd;
       margin: 0 4px;
+    }
+
+    .unsaved-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #856404;
+      font-weight: 500;
+      margin-left: 8px;
     }
 
     .btn-active {
@@ -1763,9 +1841,28 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   /** Whether validation panel is visible */
   showValidationPanel = signal(false);
 
+  /** Whether column editor panel is visible */
+  showColumnEditor = signal(false);
+
+  /** Column index being edited in bulk */
+  columnEditorIndex = signal(-1);
+
+  /** Whether cache recovery panel is visible */
+  showCacheRecovery = signal(false);
+
+  /** Current cache ID (if loaded from cache) */
+  currentCacheId = signal<string | null>(null);
+
+  /** Number of changes made (for cache tracking) */
+  changeCount = signal(0);
+
+  /** Current file name */
+  fileName = signal('untitled.sdrf.tsv');
+
   // ============ Pyodide Validation State ============
 
   private pyodideService: PyodideValidatorService;
+  private cacheService: TableCacheService = tableCacheService;
 
   /** Pyodide validation in progress */
   pyodideValidating = signal(false);
@@ -1914,6 +2011,12 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   // ============ Lifecycle ============
 
   ngOnInit(): void {
+    // Check for cached tables first
+    if (this.cacheService.hasCachedTables() && !this.url && !this.content) {
+      this.showCacheRecovery.set(true);
+      return;
+    }
+
     // Auto-load from URL or content if provided
     if (this.url) {
       this.loadFromUrl(this.url);
@@ -2349,6 +2452,9 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
     newTable.columns[col] = column;
     this.table.set(newTable);
     this.tableChange.emit(newTable);
+
+    // Auto-save after cell edit
+    this.autoSaveTable();
   }
 
   isSelected(row: number, col: number): boolean {
@@ -2410,6 +2516,10 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
       this.scrollTop.set(0);
       this.clearSelection();
 
+      // Reset cache state for new file
+      this.currentCacheId.set(null);
+      this.changeCount.set(0);
+
       if (result.warnings.length > 0) {
         console.warn('Parse warnings:', result.warnings);
       }
@@ -2442,6 +2552,98 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
     // Settings were saved, panel can now use the new configuration
     console.log('LLM settings saved');
   }
+
+  // ============ Column Editor Methods ============
+
+  openColumnEditor(columnIndex: number): void {
+    this.columnEditorIndex.set(columnIndex);
+    this.showColumnEditor.set(true);
+  }
+
+  closeColumnEditor(): void {
+    this.showColumnEditor.set(false);
+    this.columnEditorIndex.set(-1);
+  }
+
+  onBulkEditColumn(event: ColumnBulkEditEvent): void {
+    const t = this.table();
+    if (!t || event.columnIndex < 0 || event.columnIndex >= t.columns.length) {
+      console.error('Invalid column index for bulk edit:', event.columnIndex);
+      return;
+    }
+
+    const column = t.columns[event.columnIndex];
+
+    // Apply the value to all selected samples
+    for (const sampleIndex of event.sampleIndices) {
+      if (sampleIndex >= 1 && sampleIndex <= t.sampleCount) {
+        setValueForSample(column, sampleIndex, event.value);
+      }
+    }
+
+    // Force update
+    this.table.set({ ...t });
+    this.tableChange.emit(t);
+
+    // Auto-save
+    this.autoSaveTable();
+
+    console.log(`Bulk edited column "${column.name}" for ${event.sampleIndices.length} samples`);
+
+    // Close the panel
+    this.closeColumnEditor();
+  }
+
+  // ============ Cache Recovery Methods ============
+
+  onRecoverCache(event: RecoverCacheEvent): void {
+    const cached = this.cacheService.loadTable(event.cacheId);
+    if (!cached) {
+      console.error('Failed to load cached table:', event.cacheId);
+      return;
+    }
+
+    // Load the table
+    this.table.set(cached.table);
+    this.tableChange.emit(cached.table);
+    this.currentCacheId.set(event.cacheId);
+    this.changeCount.set(cached.entry.changeCount);
+    this.fileName.set(cached.entry.fileName);
+
+    // Hide recovery panel
+    this.showCacheRecovery.set(false);
+
+    console.log(`Recovered table from cache: ${cached.entry.fileName}`);
+  }
+
+  dismissCacheRecovery(): void {
+    this.showCacheRecovery.set(false);
+  }
+
+  private autoSaveTable(): void {
+    const t = this.table();
+    const name = this.fileName();
+
+    if (!t || !name) return;
+
+    // Increment change count
+    const count = this.changeCount() + 1;
+    this.changeCount.set(count);
+
+    // Save to cache
+    const cacheId = this.cacheService.saveTable(
+      t,
+      name,
+      this.currentCacheId() || undefined,
+      count
+    );
+
+    if (cacheId && !this.currentCacheId()) {
+      this.currentCacheId.set(cacheId);
+    }
+  }
+
+  // ============ Recommendation Methods ============
 
   onApplyRecommendation(event: ApplyRecommendationEvent): void {
     const rec = event.recommendation;

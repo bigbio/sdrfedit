@@ -403,6 +403,61 @@ type ViewTab = 'recommendations' | 'quality' | 'advanced';
                 </div>
               }
 
+              <!-- Validation Errors Section (from sdrf-pipelines validator) -->
+              @if (pyodideErrors().length > 0 && pyodideHasValidated()) {
+                <div class="validation-errors-section">
+                  <div class="section-header-line">
+                    <h3 class="section-title">
+                      🔍 Validation Errors
+                      <span class="error-count-badge">
+                        {{ pyodideErrorCount() }} error{{ pyodideErrorCount() !== 1 ? 's' : '' }}
+                        @if (pyodideWarningCount() > 0) {
+                          , {{ pyodideWarningCount() }} warning{{ pyodideWarningCount() !== 1 ? 's' : '' }}
+                        }
+                      </span>
+                    </h3>
+                  </div>
+                  <div class="validation-errors-list">
+                    @for (error of pyodideErrors().slice(0, 10); track $index) {
+                      <div class="validation-error-item" [class.error-level-warning]="error.level === 'warning'">
+                        <div class="error-level-badge" [class.level-error]="error.level === 'error'" [class.level-warning]="error.level === 'warning'">
+                          {{ error.level === 'error' ? '❌' : '⚠️' }}
+                        </div>
+                        <div class="error-content">
+                          <div class="error-message">{{ error.message }}</div>
+                          @if (error.column || error.row >= 0) {
+                            <div class="error-location">
+                              @if (error.column) {
+                                <span>{{ error.column }}</span>
+                              }
+                              @if (error.row >= 0) {
+                                <span>Row {{ error.row + 1 }}</span>
+                              }
+                              @if (error.value) {
+                                <span class="error-value">Value: "{{ error.value }}"</span>
+                              }
+                            </div>
+                          }
+                          @if (error.suggestion) {
+                            <div class="error-suggestion">💡 {{ error.suggestion }}</div>
+                          }
+                        </div>
+                        @if (error.column && error.row >= 0) {
+                          <button type="button" class="btn btn-xs btn-jump" (click)="jumpToValidationError(error)" title="Jump to cell">
+                            Jump
+                          </button>
+                        }
+                      </div>
+                    }
+                    @if (pyodideErrors().length > 10) {
+                      <div class="more-errors-notice">
+                        ... and {{ pyodideErrors().length - 10 }} more error{{ pyodideErrors().length - 10 !== 1 ? 's' : '' }}
+                      </div>
+                    }
+                  </div>
+                </div>
+              }
+
               <!-- Streaming Output (collapsible) -->
               @if (streamContent()) {
                 <details class="stream-section" [open]="analyzing()">
@@ -415,6 +470,14 @@ type ViewTab = 'recommendations' | 'quality' | 'advanced';
                   </summary>
                   <pre class="stream-output">{{ streamContent() }}</pre>
                 </details>
+              }
+
+              <!-- AI Recommendations Section -->
+              @if ((useActionableSuggestions() && pendingActionableSuggestions().length > 0) || (!useActionableSuggestions() && result())) {
+                <div class="ai-recommendations-header">
+                  <h3 class="section-title">✨ AI Recommendations</h3>
+                  <p class="section-subtitle">Suggestions based on validation results and AI knowledge</p>
+                </div>
               }
 
               <!-- Results - Actionable Suggestions (new system with OLS validation) -->
@@ -863,6 +926,136 @@ type ViewTab = 'recommendations' | 'quality' | 'advanced';
       margin-top: 6px;
       white-space: pre-wrap;
       word-break: break-word;
+    }
+
+    .validation-errors-section {
+      margin: 12px 16px;
+      padding: 12px;
+      background: #fef2f2;
+      border: 2px solid #fecaca;
+      border-radius: 8px;
+    }
+
+    .section-header-line {
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0;
+      color: #1f2937;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .error-count-badge {
+      font-size: 11px;
+      font-weight: 500;
+      background: #fee2e2;
+      color: #991b1b;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+
+    .validation-errors-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .validation-error-item {
+      display: flex;
+      gap: 10px;
+      padding: 10px;
+      background: white;
+      border: 1px solid #fecaca;
+      border-radius: 6px;
+      align-items: flex-start;
+    }
+
+    .validation-error-item.error-level-warning {
+      background: #fffbeb;
+      border-color: #fde68a;
+    }
+
+    .error-level-badge {
+      font-size: 16px;
+      flex-shrink: 0;
+      width: 24px;
+      text-align: center;
+    }
+
+    .error-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .error-message {
+      font-size: 13px;
+      color: #1f2937;
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+
+    .error-location {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-size: 11px;
+      color: #6b7280;
+      margin-bottom: 4px;
+    }
+
+    .error-location span {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+
+    .error-value {
+      font-family: monospace;
+      color: #991b1b;
+    }
+
+    .error-suggestion {
+      font-size: 12px;
+      color: #059669;
+      margin-top: 4px;
+      padding: 4px 8px;
+      background: #d1fae5;
+      border-radius: 4px;
+    }
+
+    .btn-jump {
+      flex-shrink: 0;
+      font-size: 11px;
+    }
+
+    .more-errors-notice {
+      text-align: center;
+      font-size: 12px;
+      color: #6b7280;
+      padding: 8px;
+      background: white;
+      border-radius: 4px;
+    }
+
+    .ai-recommendations-header {
+      margin: 12px 16px 8px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #e5e7eb;
+    }
+
+    .ai-recommendations-header .section-title {
+      margin-bottom: 4px;
+    }
+
+    .section-subtitle {
+      font-size: 12px;
+      color: #6b7280;
+      margin: 0;
     }
 
     .results-section {
