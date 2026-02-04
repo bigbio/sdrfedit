@@ -8,7 +8,11 @@ import { Injectable } from '@angular/core';
 import {
   WizardState,
   OntologyTerm,
+  DynamicColumnDefault,
   LABEL_CONFIGS,
+  isHumanTemplate,
+  isCellLineTemplate,
+  isVertebrateTemplate,
 } from '../models/wizard';
 import { SdrfTable, createEmptyTable } from '../models/sdrf-table';
 import { SdrfColumn, ColumnType, Modifier } from '../models/sdrf-column';
@@ -28,8 +32,8 @@ export class WizardGeneratorService {
     table.columns.push(this.createDiseaseColumn(state, columnPosition++));
     table.columns.push(this.createOrganismPartColumn(state, columnPosition++));
 
-    // Template-specific columns
-    if (state.template === 'human') {
+    // Template-specific columns (using helper functions for both legacy and new template IDs)
+    if (isHumanTemplate(state.template)) {
       if (state.defaultSex || state.samples.some(s => s.sex)) {
         table.columns.push(this.createSexColumn(state, columnPosition++));
       }
@@ -38,19 +42,29 @@ export class WizardGeneratorService {
       }
     }
 
-    if (state.template === 'cell-line') {
+    if (isCellLineTemplate(state.template)) {
       if (state.defaultCellLine || state.samples.some(s => s.cellLine)) {
         table.columns.push(this.createCellLineColumn(state, columnPosition++));
       }
     }
 
-    if (state.template === 'vertebrate') {
+    if (isVertebrateTemplate(state.template)) {
       if (state.strainBreed) {
         table.columns.push(this.createStrainBreedColumn(state, columnPosition++));
       }
       if (state.developmentalStage) {
         table.columns.push(this.createDevelopmentalStageColumn(state, columnPosition++));
       }
+    }
+
+    // Add any dynamic column defaults from template
+    for (const colDefault of state.dynamicColumnDefaults) {
+      // Skip columns we already handle explicitly
+      const handled = ['organism', 'disease', 'organism part', 'sex', 'age', 'cell line', 'strain', 'developmental stage'];
+      if (handled.some(h => colDefault.columnName.includes(h))) {
+        continue;
+      }
+      table.columns.push(this.createDynamicColumn(colDefault, columnPosition++));
     }
 
     // Biological replicate
@@ -620,6 +634,27 @@ export class WizardGeneratorService {
       modifiers,
       columnPosition: position,
       isRequired: true,
+    };
+  }
+
+  /**
+   * Create a column from a dynamic column default.
+   */
+  private createDynamicColumn(colDefault: DynamicColumnDefault, position: number): SdrfColumn {
+    // Determine column type from name
+    let type: ColumnType = 'comment';
+    if (colDefault.columnName.startsWith('characteristics[')) {
+      type = 'characteristics';
+    } else if (colDefault.columnName.startsWith('factor value[')) {
+      type = 'factor_value';
+    }
+
+    return {
+      name: colDefault.columnName,
+      type,
+      value: colDefault.value,
+      modifiers: [],
+      columnPosition: position,
     };
   }
 }

@@ -8,13 +8,16 @@ import {
   Component,
   Input,
   inject,
+  computed,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
 import { WizardStateService } from '../../../core/services/wizard-state.service';
+import { TemplateService } from '../../../core/services/template.service';
 import { WIZARD_TEMPLATES, WizardTemplate } from '../../../core/models/wizard';
+import { TemplateInfo as DynamicTemplateInfo } from '../../../core/models/template';
 
 @Component({
   selector: 'wizard-experiment-setup',
@@ -33,7 +36,7 @@ import { WIZARD_TEMPLATES, WizardTemplate } from '../../../core/models/wizard';
 
       <!-- Template Cards -->
       <div class="template-grid">
-        @for (template of templates; track template.id) {
+        @for (template of templates(); track template.id) {
           <button
             class="template-card"
             [class.selected]="wizardState.template() === template.id"
@@ -365,11 +368,40 @@ import { WIZARD_TEMPLATES, WizardTemplate } from '../../../core/models/wizard';
 })
 export class ExperimentSetupComponent {
   @Input() aiEnabled = false;
+  @Input() availableTemplates: string[] = ['human', 'cell-lines', 'vertebrates', 'ms-proteomics'];
 
   readonly wizardState = inject(WizardStateService);
-  readonly templates = WIZARD_TEMPLATES;
+  readonly templateService = inject(TemplateService);
+
+  /** Fallback to static templates if service hasn't loaded yet */
+  readonly staticTemplates = WIZARD_TEMPLATES;
 
   readonly state = this.wizardState.state;
+
+  /** Get templates filtered by availableTemplates input */
+  readonly templates = computed(() => {
+    const dynamicTemplates = this.templateService.getTemplateInfoList(this.availableTemplates);
+
+    // If dynamic templates loaded, use them
+    if (dynamicTemplates.length > 0) {
+      return dynamicTemplates.map(t => ({
+        id: t.id as WizardTemplate,
+        name: t.name,
+        description: t.description,
+        icon: t.icon || 'category',
+        examples: [] as string[],
+      }));
+    }
+
+    // Fall back to static templates filtered by availableTemplates
+    return this.staticTemplates.filter(t =>
+      this.availableTemplates.includes(t.id) ||
+      this.availableTemplates.includes(t.id.replace('-', '-'))
+    );
+  });
+
+  /** Check if templates are still loading */
+  readonly isLoading = this.templateService.isLoading;
 
   selectTemplate(template: WizardTemplate): void {
     this.wizardState.setTemplate(template);
@@ -392,12 +424,45 @@ export class ExperimentSetupComponent {
   }
 
   getIcon(templateId: WizardTemplate): string {
+    // First check dynamic templates
+    const dynamicTemplate = this.templateService.getTemplateInfo(templateId);
+    if (dynamicTemplate?.icon) {
+      return this.iconToEmoji(dynamicTemplate.icon);
+    }
+
+    // Fall back to static icons
     switch (templateId) {
       case 'human': return '\ud83e\uddd1';
-      case 'cell-line': return '\ud83e\uddeb';
-      case 'vertebrate': return '\ud83d\udc2d';
+      case 'cell-line':
+      case 'cell-lines': return '\ud83e\uddeb';
+      case 'vertebrate':
+      case 'vertebrates': return '\ud83d\udc2d';
+      case 'ms-proteomics': return '\ud83d\udcca';
       case 'other': return '\ud83e\uddec';
       default: return '\u2753';
     }
+  }
+
+  /** Convert Material icon name to emoji */
+  private iconToEmoji(icon: string): string {
+    const iconMap: Record<string, string> = {
+      'person': '\ud83e\uddd1',
+      'science': '\ud83e\uddeb',
+      'pets': '\ud83d\udc2d',
+      'category': '\ud83e\uddec',
+      'analytics': '\ud83d\udcca',
+      'biotech': '\ud83e\uddea',
+      'eco': '\ud83c\udf31',
+      'bug_report': '\ud83e\udeb2',
+      'scatter_plot': '\ud83d\udcc8',
+      'assessment': '\ud83d\udcca',
+      'grain': '\ud83c\udf3e',
+      'link': '\ud83d\udd17',
+      'vaccines': '\ud83d\udc89',
+      'diversity_3': '\ud83e\udda0',
+      'hub': '\ud83d\udd17',
+      'developer_board': '\ud83d\udcdf',
+    };
+    return iconMap[icon] || '\u2753';
   }
 }

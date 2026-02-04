@@ -90,7 +90,6 @@ const BUFFER_ROWS = 10;
             <div class="banner-content">
               <div class="banner-left">
                 <h1 class="banner-title">SDRF Editor</h1>
-                <p class="banner-subtitle">Sample and Data Relationship Format editor for proteomics metadata</p>
               </div>
               <div class="banner-nav">
                 <a href="https://sdrf.quantms.org/" target="_blank" class="nav-link">SDRF Project</a>
@@ -389,21 +388,31 @@ const BUFFER_ROWS = 10;
               </div>
 
               <div class="validation-panel-body">
-                <!-- Template Selector -->
+                <!-- Template Selector: only show templates from library/API when loaded -->
                 <div class="template-selector-row">
                   <span class="template-label">Templates:</span>
-                  <div class="template-chips">
-                    @for (template of pyodideAvailableTemplates().length > 0 ? pyodideAvailableTemplates() : ['default', 'human', 'vertebrates', 'nonvertebrates', 'plants', 'cell_lines']; track template) {
-                      <label class="template-chip" [class.selected]="selectedTemplates().includes(template)">
-                        <input
-                          type="checkbox"
-                          [checked]="selectedTemplates().includes(template)"
-                          (change)="toggleTemplate(template)"
-                        />
-                        {{ template }}
-                      </label>
-                    }
-                  </div>
+                  @if (pyodideAvailableTemplates().length > 0) {
+                    <div class="template-chips">
+                      @for (template of pyodideAvailableTemplates(); track template) {
+                        <label class="template-chip" [class.selected]="selectedTemplates().includes(template)">
+                          <input
+                            type="checkbox"
+                            [checked]="selectedTemplates().includes(template)"
+                            (change)="toggleTemplate(template)"
+                          />
+                          {{ template }}
+                        </label>
+                      }
+                    </div>
+                  } @else if (pyodideState() === 'loading') {
+                    <span class="template-loading">Loading templates...</span>
+                  } @else if (pyodideState() === 'not-loaded') {
+                    <span class="template-loading">Load validator to see templates</span>
+                  } @else if (pyodideState() === 'error') {
+                    <span class="template-loading">Templates unavailable</span>
+                  } @else {
+                    <span class="template-loading">No templates available</span>
+                  }
                   <button
                     class="btn btn-primary btn-sm"
                     [disabled]="pyodideValidating() || selectedTemplates().length === 0"
@@ -598,12 +607,21 @@ const BUFFER_ROWS = 10;
           </div>
 
           <div class="landing-actions">
-            <button class="btn btn-primary btn-large" (click)="fileInput.click()">
-              📂 Import SDRF File
-            </button>
             <button class="btn btn-create btn-large" (click)="openWizard()">
               ✨ Create New SDRF
             </button>
+            <button class="btn btn-primary btn-large" (click)="fileInput.click()">
+              📂 Import SDRF File
+            </button>
+            <input
+              type="text"
+              [(ngModel)]="loadUrlValue"
+              placeholder="Enter SDRF URL..."
+              class="url-input"
+              (keydown.enter)="onLoadUrlClick()"
+            />
+            <button class="btn btn-secondary" (click)="onLoadUrlClick()">Load URL</button>
+            <button class="btn btn-secondary" (click)="onLoadExampleClick()">Load Example</button>
           </div>
 
           <div class="landing-content">
@@ -712,6 +730,7 @@ const BUFFER_ROWS = 10;
       @if (showWizard()) {
         <sdrf-wizard
           [aiEnabled]="isAiConfigured()"
+          [availableTemplates]="availableWizardTemplates"
           (complete)="onWizardComplete($event)"
           (cancel)="closeWizard()"
         />
@@ -857,9 +876,26 @@ const BUFFER_ROWS = 10;
 
     .landing-actions {
       display: flex;
-      gap: 16px;
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
       justify-content: center;
+      gap: 12px;
       padding: 0 40px 40px;
+    }
+
+    .landing-actions .url-input {
+      padding: 10px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      border-radius: 6px;
+      font-size: 14px;
+      min-width: 280px;
+      background: rgba(255, 255, 255, 0.15);
+      color: white;
+    }
+
+    .landing-actions .url-input::placeholder {
+      color: rgba(255, 255, 255, 0.7);
     }
 
     .btn-large {
@@ -1610,6 +1646,12 @@ const BUFFER_ROWS = 10;
       height: 12px;
     }
 
+    .template-loading {
+      font-size: 13px;
+      color: #666;
+      font-style: italic;
+    }
+
     .btn-sm {
       padding: 6px 12px;
       font-size: 12px;
@@ -2114,11 +2156,17 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   /** URL to load SDRF from */
   @Input() url?: string;
 
+  /** Example SDRF URL for "Load Example" on the landing page */
+  @Input() exampleUrl?: string;
+
   /** SDRF content to load directly */
   @Input() content?: string;
 
   /** Whether the editor is read-only */
   @Input() readonly = false;
+
+  /** Available templates for the creation wizard (defaults to common templates) */
+  @Input() availableWizardTemplates: string[] = ['human', 'cell-lines', 'vertebrates', 'ms-proteomics'];
 
   // ============ Outputs ============
 
@@ -2127,6 +2175,12 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   /** Emitted when validation completes */
   @Output() validationComplete = new EventEmitter<ValidationResult>();
+
+  /** Emitted when user requests to load from URL (landing page) */
+  @Output() loadUrlRequested = new EventEmitter<string>();
+
+  /** Emitted when user requests to load the example SDRF (landing page) */
+  @Output() loadExampleRequested = new EventEmitter<void>();
 
   // ============ View References ============
 
@@ -2229,7 +2283,7 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   pyodideHasValidated = signal(false);
 
   /** Selected templates for validation */
-  selectedTemplates = signal<string[]>(['default']);
+  selectedTemplates = signal<string[]>(['ms-proteomics']);
 
   /** Aggregated validation errors (grouped by message) */
   aggregatedErrors = computed(() => this.aggregateErrors(this.pyodideErrors()));
@@ -2252,6 +2306,9 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   /** Last selected row for shift-click range selection */
   private lastSelectedRow: number | null = null;
+
+  /** URL input value on the landing page (Load URL) */
+  loadUrlValue = '';
 
   // ============ Filter State ============
 
@@ -2480,11 +2537,20 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
     try {
       await this.pyodideService.initialize();
 
-      // Auto-detect templates based on content
+      const available = this.pyodideAvailableTemplates();
+      if (available.length === 0) return;
+
+      // Prefer auto-detected templates from table content; otherwise keep only valid names
       if (this.table()) {
         const tsvContent = sdrfExport.exportToTsv(this.table()!);
         const detected = this.pyodideService.detectTemplates(tsvContent);
-        this.selectedTemplates.set(detected);
+        const valid = detected.filter(t => available.includes(t));
+        const fallback = available.includes('ms-proteomics') ? 'ms-proteomics' : available[0];
+        this.selectedTemplates.set(valid.length > 0 ? valid : [fallback]);
+      } else {
+        const current = this.selectedTemplates().filter(t => available.includes(t));
+        const fallback = available.includes('ms-proteomics') ? 'ms-proteomics' : available[0];
+        this.selectedTemplates.set(current.length > 0 ? current : [fallback]);
       }
     } catch (err) {
       console.error('Failed to initialize Pyodide:', err);
@@ -2519,10 +2585,19 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
         console.log(`[Validate] First 3 TSV lines:`, lines);
       }
 
+      // Use only template names that exist in the loaded library/API list
+      const available = this.pyodideAvailableTemplates();
+      let templatesToUse = this.selectedTemplates().filter(t => available.includes(t));
+      if (templatesToUse.length === 0 && available.length > 0) {
+        const defaultTemplate = available.includes('ms-proteomics') ? 'ms-proteomics' : available[0];
+        templatesToUse = [defaultTemplate];
+        this.selectedTemplates.set(templatesToUse);
+      }
+
       // Run validation
       const errors = await this.pyodideService.validate(
         tsvContent,
-        this.selectedTemplates(),
+        templatesToUse,
         { skipOntology: true }
       );
 
@@ -2670,6 +2745,17 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
       this.loading.set(false);
       input.value = ''; // Reset input
     });
+  }
+
+  onLoadUrlClick(): void {
+    const url = this.loadUrlValue?.trim();
+    if (url) {
+      this.loadUrlRequested.emit(url);
+    }
+  }
+
+  onLoadExampleClick(): void {
+    this.loadExampleRequested.emit();
   }
 
   onScroll(event: Event): void {

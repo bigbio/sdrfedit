@@ -131,7 +131,7 @@ export class SdrfApiValidatorService {
    */
   async validate(
     sdrfTsv: string,
-    templates: string[] = ['default'],
+    templates: string[] = ['ms-proteomics'],
     options: { skipOntology?: boolean; useOlsCacheOnly?: boolean } = {}
   ): Promise<ValidationError[]> {
     const { skipOntology = true, useOlsCacheOnly = true } = options;
@@ -180,7 +180,7 @@ export class SdrfApiValidatorService {
    */
   async validateFile(
     file: File,
-    templates: string[] = ['default'],
+    templates: string[] = ['ms-proteomics'],
     options: { skipOntology?: boolean; useOlsCacheOnly?: boolean } = {}
   ): Promise<ValidationError[]> {
     const { skipOntology = true, useOlsCacheOnly = true } = options;

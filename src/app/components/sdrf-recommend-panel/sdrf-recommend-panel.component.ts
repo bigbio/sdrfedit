@@ -1816,7 +1816,7 @@ export class SdrfRecommendPanelComponent implements OnChanges, AfterViewInit {
   readonly pyodideValidating = signal(false);
   readonly pyodideErrors = signal<ValidationError[]>([]);
   readonly pyodideHasValidated = signal(false);
-  readonly selectedTemplates = signal<string[]>(['default']);
+  readonly selectedTemplates = signal<string[]>(['ms-proteomics']);
 
   // Dismissed recommendations
   private dismissedIds = new Set<string>();
@@ -2563,11 +2563,21 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
   async initPyodide(): Promise<void> {
     try {
       await this.pyodideService.initialize();
-      // Auto-detect templates based on table content
+
+      const available = this.pyodideAvailableTemplates();
+      if (available.length === 0) return;
+
+      // Prefer auto-detected templates from table content; otherwise keep only valid names
       if (this.table) {
         const tsvContent = sdrfExport.exportToTsv(this.table);
         const detected = this.pyodideService.detectTemplates(tsvContent);
-        this.selectedTemplates.set(detected);
+        const valid = detected.filter(t => available.includes(t));
+        const fallback = available.includes('ms-proteomics') ? 'ms-proteomics' : available[0];
+        this.selectedTemplates.set(valid.length > 0 ? valid : [fallback]);
+      } else {
+        const current = this.selectedTemplates().filter(t => available.includes(t));
+        const fallback = available.includes('ms-proteomics') ? 'ms-proteomics' : available[0];
+        this.selectedTemplates.set(current.length > 0 ? current : [fallback]);
       }
     } catch (err) {
       console.error('Failed to initialize Pyodide:', err);
@@ -2598,10 +2608,19 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
         console.log(`[RecPanel Validate] First 3 TSV lines:`, lines);
       }
 
+      // Use only template names that exist in the loaded library/API list
+      const available = this.pyodideAvailableTemplates();
+      let templatesToUse = this.selectedTemplates().filter(t => available.includes(t));
+      if (templatesToUse.length === 0 && available.length > 0) {
+        const defaultTemplate = available.includes('ms-proteomics') ? 'ms-proteomics' : available[0];
+        templatesToUse = [defaultTemplate];
+        this.selectedTemplates.set(templatesToUse);
+      }
+
       // Run validation
       const errors = await this.pyodideService.validate(
         tsvContent,
-        this.selectedTemplates(),
+        templatesToUse,
         { skipOntology: true } // Skip ontology for speed
       );
 

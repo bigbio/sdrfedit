@@ -1,7 +1,7 @@
 /**
  * Instrument & Protocol Component (Step 5)
  *
- * Instrument selection, cleavage agent, and modifications.
+ * Instrument selection, cleavage agent, and modifications with UNIMOD search.
  */
 
 import {
@@ -19,10 +19,14 @@ import {
   OntologyTerm,
   WizardModification,
   WizardCleavageAgent,
+  ModificationPosition,
   COMMON_MODIFICATIONS,
   COMMON_CLEAVAGE_AGENTS,
+  MODIFICATION_POSITIONS,
+  AMINO_ACIDS,
 } from '../../../core/models/wizard';
 import { olsService } from '../../../core/services/ols.service';
+import { unimodService, UnimodEntry } from '../../../core/services/unimod.service';
 
 @Component({
   selector: 'wizard-instrument-protocol',
@@ -120,59 +124,151 @@ import { olsService } from '../../../core/services/ols.service';
       <div class="form-section">
         <label class="form-label">
           Post-Translational Modifications
-          <span class="help-text">Select fixed and variable modifications (optional)</span>
+          <span class="help-text">Search UNIMOD or select common modifications</span>
         </label>
 
-        <!-- Fixed Modifications -->
-        <div class="mod-section">
-          <h4>Fixed Modifications</h4>
-          <p class="mod-description">Applied to all occurrences of the residue</p>
-
-          <div class="mod-grid">
-            @for (mod of fixedMods; track mod.name) {
-              <button
-                class="mod-btn"
-                [class.selected]="isModSelected(mod)"
-                (click)="toggleModification(mod)"
-              >
-                {{ mod.name }} ({{ mod.targetAminoAcids }})
-              </button>
+        <!-- UNIMOD Search -->
+        <div class="mod-search-section">
+          <h4>Search UNIMOD</h4>
+          <div class="autocomplete-container">
+            <input
+              type="text"
+              class="form-input"
+              [ngModel]="modSearch()"
+              (ngModelChange)="searchModification($event)"
+              (focus)="showModResults.set(true)"
+              placeholder="Search by name or accession (e.g., Oxidation, UNIMOD:35)..."
+            />
+            @if (showModResults() && modResults().length > 0) {
+              <div class="autocomplete-dropdown mod-dropdown">
+                @for (result of modResults(); track result.accession) {
+                  <button
+                    class="autocomplete-option mod-option"
+                    (click)="selectUnimodEntry(result)"
+                  >
+                    <div class="mod-option-main">
+                      <span class="option-label">{{ result.name }}</span>
+                      <span class="option-id">{{ result.accession }}</span>
+                    </div>
+                    <div class="mod-option-details">
+                      <span class="mod-mass">{{ result.deltaMonoMass >= 0 ? '+' : '' }}{{ result.deltaMonoMass.toFixed(4) }} Da</span>
+                      <span class="mod-sites">{{ result.sites.join(', ') }}</span>
+                    </div>
+                  </button>
+                }
+              </div>
             }
           </div>
         </div>
 
-        <!-- Variable Modifications -->
+        <!-- Quick Add Common Modifications -->
         <div class="mod-section">
-          <h4>Variable Modifications</h4>
-          <p class="mod-description">May or may not be present on peptides</p>
+          <h4>Common Modifications</h4>
+          <p class="mod-description">Click to add with default settings</p>
 
-          <div class="mod-grid">
-            @for (mod of variableMods; track mod.name) {
-              <button
-                class="mod-btn"
-                [class.selected]="isModSelected(mod)"
-                (click)="toggleModification(mod)"
-              >
-                {{ mod.name }} ({{ mod.targetAminoAcids }})
-              </button>
-            }
-          </div>
-        </div>
-
-        <!-- Selected Modifications Summary -->
-        @if (state().modifications.length > 0) {
-          <div class="selected-mods">
-            <h4>Selected Modifications</h4>
-            <div class="mod-list">
-              @for (mod of state().modifications; track mod.name; let i = $index) {
-                <div class="mod-tag" [class.fixed]="mod.type === 'fixed'">
-                  <span class="mod-type">{{ mod.type }}</span>
-                  <span class="mod-name">{{ mod.name }}</span>
-                  <span class="mod-site">({{ mod.targetAminoAcids }})</span>
-                  <button class="mod-remove" (click)="removeModification(i)">&times;</button>
-                </div>
+          <div class="mod-subsection">
+            <span class="mod-subsection-label">Fixed:</span>
+            <div class="mod-grid">
+              @for (mod of fixedMods; track mod.name + mod.targetAminoAcids) {
+                <button
+                  class="mod-btn"
+                  [class.selected]="isModSelected(mod)"
+                  (click)="toggleModification(mod)"
+                >
+                  {{ mod.name }} ({{ mod.targetAminoAcids }})
+                </button>
               }
             </div>
+          </div>
+
+          <div class="mod-subsection">
+            <span class="mod-subsection-label">Variable:</span>
+            <div class="mod-grid">
+              @for (mod of variableMods; track mod.name + mod.targetAminoAcids) {
+                <button
+                  class="mod-btn"
+                  [class.selected]="isModSelected(mod)"
+                  (click)="toggleModification(mod)"
+                >
+                  {{ mod.name }} ({{ mod.targetAminoAcids }})
+                </button>
+              }
+            </div>
+          </div>
+        </div>
+
+        <!-- Selected Modifications - Editable Table -->
+        @if (state().modifications.length > 0) {
+          <div class="selected-mods-table">
+            <h4>Selected Modifications ({{ state().modifications.length }})</h4>
+            <table class="mods-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Accession</th>
+                  <th>Target</th>
+                  <th>Position</th>
+                  <th>Type</th>
+                  <th class="col-actions"></th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (mod of state().modifications; track $index; let i = $index) {
+                  <tr>
+                    <td class="mod-name-cell">{{ mod.name }}</td>
+                    <td class="mod-accession-cell">
+                      <a
+                        [href]="'https://www.unimod.org/modifications_view.php?editid1=' + getUnimodId(mod.unimodAccession)"
+                        target="_blank"
+                        class="unimod-link"
+                      >{{ mod.unimodAccession || '-' }}</a>
+                    </td>
+                    <td>
+                      <select
+                        class="cell-select"
+                        [ngModel]="mod.targetAminoAcids"
+                        (ngModelChange)="updateModification(i, 'targetAminoAcids', $event)"
+                      >
+                        <option value="N-term">N-term</option>
+                        <option value="C-term">C-term</option>
+                        @for (aa of aminoAcids; track aa) {
+                          <option [value]="aa">{{ aa }}</option>
+                        }
+                        @for (combo of getTargetCombos(mod); track combo) {
+                          <option [value]="combo">{{ combo }}</option>
+                        }
+                      </select>
+                    </td>
+                    <td>
+                      <select
+                        class="cell-select"
+                        [ngModel]="mod.position"
+                        (ngModelChange)="updateModification(i, 'position', $event)"
+                      >
+                        @for (pos of positions; track pos.value) {
+                          <option [value]="pos.value">{{ pos.label }}</option>
+                        }
+                      </select>
+                    </td>
+                    <td>
+                      <select
+                        class="cell-select type-select"
+                        [ngModel]="mod.type"
+                        (ngModelChange)="updateModification(i, 'type', $event)"
+                        [class.fixed]="mod.type === 'fixed'"
+                        [class.variable]="mod.type === 'variable'"
+                      >
+                        <option value="fixed">Fixed</option>
+                        <option value="variable">Variable</option>
+                      </select>
+                    </td>
+                    <td class="col-actions">
+                      <button class="remove-btn" (click)="removeModification(i)">&times;</button>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
           </div>
         }
       </div>
@@ -397,6 +493,55 @@ import { olsService } from '../../../core/services/ols.service';
       margin-top: 2px;
     }
 
+    /* Modification Search */
+    .mod-search-section {
+      margin-bottom: 16px;
+      padding: 16px;
+      background: #eff6ff;
+      border-radius: 8px;
+      border: 1px solid #bfdbfe;
+    }
+
+    .mod-search-section h4 {
+      margin: 0 0 12px 0;
+      font-size: 13px;
+      font-weight: 600;
+      color: #1e40af;
+    }
+
+    .mod-dropdown {
+      max-height: 280px;
+    }
+
+    .mod-option {
+      flex-direction: column;
+      align-items: flex-start !important;
+      padding: 10px 12px;
+    }
+
+    .mod-option-main {
+      display: flex;
+      justify-content: space-between;
+      width: 100%;
+      align-items: center;
+    }
+
+    .mod-option-details {
+      display: flex;
+      gap: 12px;
+      margin-top: 4px;
+      font-size: 11px;
+    }
+
+    .mod-mass {
+      color: #059669;
+      font-weight: 500;
+    }
+
+    .mod-sites {
+      color: #6b7280;
+    }
+
     .mod-section {
       margin-top: 16px;
       padding: 16px;
@@ -415,6 +560,23 @@ import { olsService } from '../../../core/services/ols.service';
       margin: 0 0 12px 0;
       font-size: 12px;
       color: #6b7280;
+    }
+
+    .mod-subsection {
+      margin-bottom: 12px;
+    }
+
+    .mod-subsection:last-child {
+      margin-bottom: 0;
+    }
+
+    .mod-subsection-label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      margin-bottom: 8px;
     }
 
     .mod-grid {
@@ -445,71 +607,106 @@ import { olsService } from '../../../core/services/ols.service';
       color: #1e40af;
     }
 
-    .selected-mods {
-      margin-top: 16px;
-      padding: 12px;
-      background: #f0fdf4;
-      border: 1px solid #bbf7d0;
-      border-radius: 8px;
+    /* Selected Modifications Table */
+    .selected-mods-table {
+      margin-top: 20px;
     }
 
-    .selected-mods h4 {
+    .selected-mods-table h4 {
       margin: 0 0 12px 0;
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 600;
-      color: #166534;
+      color: #374151;
     }
 
-    .mod-list {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
+    .mods-table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
     }
 
-    .mod-tag {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 10px;
-      background: white;
-      border: 1px solid #d1d5db;
-      border-radius: 6px;
+    .mods-table th,
+    .mods-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #e5e7eb;
+      text-align: left;
+      font-size: 13px;
     }
 
-    .mod-tag.fixed {
-      background: #fef3c7;
-      border-color: #fcd34d;
-    }
-
-    .mod-type {
-      font-size: 10px;
-      text-transform: uppercase;
+    .mods-table th {
+      background: #f9fafb;
       font-weight: 600;
       color: #6b7280;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.05em;
     }
 
-    .mod-name {
-      font-size: 12px;
+    .mods-table tbody tr:hover {
+      background: #f9fafb;
+    }
+
+    .mod-name-cell {
       font-weight: 500;
       color: #1f2937;
     }
 
-    .mod-site {
-      font-size: 11px;
-      color: #6b7280;
+    .mod-accession-cell {
+      font-family: monospace;
+      font-size: 12px;
     }
 
-    .mod-remove {
+    .unimod-link {
+      color: #3b82f6;
+      text-decoration: none;
+    }
+
+    .unimod-link:hover {
+      text-decoration: underline;
+    }
+
+    .cell-select {
+      padding: 6px 8px;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      font-size: 12px;
+      background: white;
+      cursor: pointer;
+      min-width: 80px;
+    }
+
+    .cell-select:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+
+    .type-select.fixed {
+      background: #fef3c7;
+      border-color: #fcd34d;
+    }
+
+    .type-select.variable {
+      background: #dbeafe;
+      border-color: #93c5fd;
+    }
+
+    .col-actions {
+      width: 40px;
+      text-align: center;
+    }
+
+    .remove-btn {
       background: none;
       border: none;
-      font-size: 14px;
+      font-size: 18px;
       color: #9ca3af;
       cursor: pointer;
-      padding: 0 2px;
-      margin-left: 4px;
+      padding: 4px;
     }
 
-    .mod-remove:hover {
+    .remove-btn:hover {
       color: #ef4444;
     }
 
@@ -551,9 +748,12 @@ export class InstrumentProtocolComponent {
 
   readonly wizardState = inject(WizardStateService);
   private readonly ols = olsService;
+  private readonly unimod = unimodService;
 
   readonly state = this.wizardState.state;
   readonly cleavageAgents = COMMON_CLEAVAGE_AGENTS;
+  readonly positions = MODIFICATION_POSITIONS;
+  readonly aminoAcids = AMINO_ACIDS;
 
   readonly fixedMods = COMMON_MODIFICATIONS.filter(m => m.type === 'fixed');
   readonly variableMods = COMMON_MODIFICATIONS.filter(m => m.type === 'variable');
@@ -562,6 +762,11 @@ export class InstrumentProtocolComponent {
   readonly instrumentSearch = signal('');
   readonly instrumentResults = signal<OntologyTerm[]>([]);
   readonly showInstrumentResults = signal(false);
+
+  // Modification search
+  readonly modSearch = signal('');
+  readonly modResults = signal<UnimodEntry[]>([]);
+  readonly showModResults = signal(false);
 
   async searchInstrument(query: string): Promise<void> {
     this.instrumentSearch.set(query);
@@ -602,13 +807,64 @@ export class InstrumentProtocolComponent {
     this.wizardState.setCleavageAgent(agent);
   }
 
+  // === Modification Search ===
+
+  async searchModification(query: string): Promise<void> {
+    this.modSearch.set(query);
+    if (query.length < 2) {
+      this.modResults.set([]);
+      return;
+    }
+
+    try {
+      const results = await this.unimod.searchModifications(query, 10);
+      this.modResults.set(results);
+      this.showModResults.set(true);
+    } catch {
+      this.modResults.set([]);
+    }
+  }
+
+  selectUnimodEntry(entry: UnimodEntry): void {
+    // Create a modification from the UNIMOD entry with default settings
+    const defaultSite = entry.sites[0] || 'Anywhere';
+    const defaultPosition = this.inferPosition(entry);
+
+    const mod: WizardModification = {
+      name: entry.name,
+      targetAminoAcids: defaultSite === 'N-term' || defaultSite === 'C-term' ? defaultSite : defaultSite,
+      type: 'variable',
+      position: defaultPosition,
+      unimodAccession: entry.accession,
+      deltaMass: entry.deltaMonoMass,
+    };
+
+    this.wizardState.addModification(mod);
+    this.modSearch.set('');
+    this.modResults.set([]);
+    this.showModResults.set(false);
+  }
+
+  private inferPosition(entry: UnimodEntry): ModificationPosition {
+    const positions = entry.positions || [];
+    if (positions.includes('Protein N-term')) return 'Protein N-term';
+    if (positions.includes('Any N-term')) return 'Any N-term';
+    if (positions.includes('Protein C-term')) return 'Protein C-term';
+    if (positions.includes('Any C-term')) return 'Any C-term';
+    return 'Anywhere';
+  }
+
   isModSelected(mod: WizardModification): boolean {
-    return this.state().modifications.some(m => m.name === mod.name);
+    return this.state().modifications.some(
+      m => m.name === mod.name && m.targetAminoAcids === mod.targetAminoAcids
+    );
   }
 
   toggleModification(mod: WizardModification): void {
     if (this.isModSelected(mod)) {
-      const index = this.state().modifications.findIndex(m => m.name === mod.name);
+      const index = this.state().modifications.findIndex(
+        m => m.name === mod.name && m.targetAminoAcids === mod.targetAminoAcids
+      );
       if (index >= 0) {
         this.wizardState.removeModification(index);
       }
@@ -617,7 +873,32 @@ export class InstrumentProtocolComponent {
     }
   }
 
+  updateModification(index: number, field: keyof WizardModification, value: any): void {
+    const mods = [...this.state().modifications];
+    if (index >= 0 && index < mods.length) {
+      mods[index] = { ...mods[index], [field]: value };
+      this.wizardState.setModifications(mods);
+    }
+  }
+
   removeModification(index: number): void {
     this.wizardState.removeModification(index);
+  }
+
+  getUnimodId(accession: string | undefined): string {
+    if (!accession) return '';
+    return accession.replace('UNIMOD:', '');
+  }
+
+  getTargetCombos(mod: WizardModification): string[] {
+    // Return common multi-target combinations based on the modification
+    const combos: string[] = [];
+    if (mod.name === 'Phospho') combos.push('S,T,Y');
+    if (mod.name === 'Deamidated') combos.push('N,Q');
+    if (mod.name === 'Oxidation') combos.push('M,W');
+    if (mod.targetAminoAcids && mod.targetAminoAcids.includes(',')) {
+      combos.push(mod.targetAminoAcids);
+    }
+    return [...new Set(combos)];
   }
 }

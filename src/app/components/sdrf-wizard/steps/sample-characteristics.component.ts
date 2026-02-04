@@ -30,7 +30,8 @@ import { olsService, type DirectOlsService } from '../../../core/services/ols.se
         <h3>Sample Characteristics</h3>
         <p class="step-description">
           Define the biological characteristics shared by all your samples.
-          Sample-specific values can be set in the next step.
+          These values will be used as <strong>defaults</strong> for cells not specified individually.
+          Sample-specific overrides can be set in the next step.
         </p>
       </div>
 
@@ -174,108 +175,106 @@ import { olsService, type DirectOlsService } from '../../../core/services/ols.se
       </div>
 
       <!-- Template-specific fields -->
-      @switch (state().template) {
-        @case ('human') {
-          <div class="template-fields">
-            <h4>Human-specific Fields</h4>
+      @if (wizardState.isHumanTemplate()) {
+        <div class="template-fields">
+          <h4>Human-specific Fields</h4>
 
-            <div class="form-row">
-              <div class="form-section">
-                <label class="form-label">
-                  Default Sex
-                  <span class="help-text">Biological sex (can be overridden per sample)</span>
-                </label>
-                <select
-                  class="form-select"
-                  [ngModel]="state().defaultSex"
-                  (ngModelChange)="wizardState.setDefaultSex($event)"
-                >
-                  <option [ngValue]="null">-- Select --</option>
-                  <option value="male">male</option>
-                  <option value="female">female</option>
-                  <option value="not available">not available</option>
-                </select>
-              </div>
-
-              <div class="form-section">
-                <label class="form-label">
-                  Default Age
-                  <span class="help-text">Format: 25Y (years), 6M (months), or not available</span>
-                </label>
-                <input
-                  type="text"
-                  class="form-input"
-                  [ngModel]="state().defaultAge"
-                  (ngModelChange)="wizardState.setDefaultAge($event)"
-                  placeholder="e.g., 45Y or not available"
-                />
-              </div>
+          <div class="form-row">
+            <div class="form-section">
+              <label class="form-label">
+                Default Sex
+                <span class="help-text">Biological sex (can be overridden per sample)</span>
+              </label>
+              <select
+                class="form-select"
+                [ngModel]="state().defaultSex"
+                (ngModelChange)="wizardState.setDefaultSex($event)"
+              >
+                <option [ngValue]="null">-- Select --</option>
+                <option value="male">male</option>
+                <option value="female">female</option>
+                <option value="not available">not available</option>
+              </select>
             </div>
-          </div>
-        }
-
-        @case ('cell-line') {
-          <div class="template-fields">
-            <h4>Cell Line Fields</h4>
 
             <div class="form-section">
               <label class="form-label">
-                Cell Line Name
-                <span class="help-text">Name of the cell line (e.g., HeLa, HEK293, MCF-7)</span>
+                Default Age
+                <span class="help-text">Format: 25Y (years), 6M (months), or not available</span>
               </label>
               <input
                 type="text"
                 class="form-input"
-                [ngModel]="state().defaultCellLine"
-                (ngModelChange)="wizardState.setDefaultCellLine($event)"
-                placeholder="e.g., HeLa"
+                [ngModel]="state().defaultAge"
+                (ngModelChange)="wizardState.setDefaultAge($event)"
+                placeholder="e.g., 45Y or not available"
               />
-              <div class="quick-select">
-                <span class="quick-label">Common:</span>
-                <button class="quick-btn" (click)="wizardState.setDefaultCellLine('HeLa')">HeLa</button>
-                <button class="quick-btn" (click)="wizardState.setDefaultCellLine('HEK293')">HEK293</button>
-                <button class="quick-btn" (click)="wizardState.setDefaultCellLine('MCF-7')">MCF-7</button>
-                <button class="quick-btn" (click)="wizardState.setDefaultCellLine('A549')">A549</button>
-              </div>
             </div>
           </div>
-        }
+        </div>
+      }
 
-        @case ('vertebrate') {
-          <div class="template-fields">
-            <h4>Vertebrate-specific Fields</h4>
+      @if (wizardState.isCellLineTemplate()) {
+        <div class="template-fields">
+          <h4>Cell Line Fields</h4>
 
-            <div class="form-row">
-              <div class="form-section">
-                <label class="form-label">
-                  Strain / Breed
-                  <span class="help-text">For mice/rats (e.g., C57BL/6, Sprague-Dawley)</span>
-                </label>
-                <input
-                  type="text"
-                  class="form-input"
-                  [ngModel]="state().strainBreed"
-                  (ngModelChange)="wizardState.setStrainBreed($event)"
-                  placeholder="e.g., C57BL/6"
-                />
-              </div>
-
-              <div class="form-section">
-                <label class="form-label">
-                  Developmental Stage
-                  <span class="help-text">Life stage (e.g., adult, embryonic day 14)</span>
-                </label>
-                <input
-                  type="text"
-                  class="form-input"
-                  [ngModel]="state().developmentalStage"
-                  (ngModelChange)="wizardState.setDevelopmentalStage($event)"
-                  placeholder="e.g., adult"
-                />
-              </div>
+          <div class="form-section">
+            <label class="form-label">
+              Cell Line Name
+              <span class="help-text">Name of the cell line (e.g., HeLa, HEK293, MCF-7)</span>
+            </label>
+            <input
+              type="text"
+              class="form-input"
+              [ngModel]="state().defaultCellLine"
+              (ngModelChange)="wizardState.setDefaultCellLine($event)"
+              placeholder="e.g., HeLa"
+            />
+            <div class="quick-select">
+              <span class="quick-label">Common:</span>
+              <button class="quick-btn" (click)="wizardState.setDefaultCellLine('HeLa')">HeLa</button>
+              <button class="quick-btn" (click)="wizardState.setDefaultCellLine('HEK293')">HEK293</button>
+              <button class="quick-btn" (click)="wizardState.setDefaultCellLine('MCF-7')">MCF-7</button>
+              <button class="quick-btn" (click)="wizardState.setDefaultCellLine('A549')">A549</button>
             </div>
           </div>
-        }
+        </div>
+      }
+
+      @if (wizardState.isVertebrateTemplate()) {
+        <div class="template-fields">
+          <h4>Vertebrate-specific Fields</h4>
+
+          <div class="form-row">
+            <div class="form-section">
+              <label class="form-label">
+                Strain / Breed
+                <span class="help-text">For mice/rats (e.g., C57BL/6, Sprague-Dawley)</span>
+              </label>
+              <input
+                type="text"
+                class="form-input"
+                [ngModel]="state().strainBreed"
+                (ngModelChange)="wizardState.setStrainBreed($event)"
+                placeholder="e.g., C57BL/6"
+              />
+            </div>
+
+            <div class="form-section">
+              <label class="form-label">
+                Developmental Stage
+                <span class="help-text">Life stage (e.g., adult, embryonic day 14)</span>
+              </label>
+              <input
+                type="text"
+                class="form-input"
+                [ngModel]="state().developmentalStage"
+                (ngModelChange)="wizardState.setDevelopmentalStage($event)"
+                placeholder="e.g., adult"
+              />
+            </div>
+          </div>
+        </div>
       }
 
       <!-- Validation Message -->

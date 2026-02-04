@@ -13,9 +13,14 @@ import {
   WizardCleavageAgent,
   WizardDataFile,
   OntologyTerm,
+  DynamicColumnDefault,
   WIZARD_STEPS,
   LABEL_CONFIGS,
   createEmptyWizardState,
+  createDefaultSample,
+  isHumanTemplate,
+  isCellLineTemplate,
+  isVertebrateTemplate,
 } from '../models/wizard';
 
 @Injectable({ providedIn: 'root' })
@@ -213,7 +218,7 @@ export class WizardStateService {
       // Adjust samples array
       const samples = [...s.samples];
       while (samples.length < sampleCount) {
-        samples.push(this.createDefaultSample(samples.length + 1));
+        samples.push(createDefaultSample(samples.length + 1));
       }
       while (samples.length > sampleCount) {
         samples.pop();
@@ -286,6 +291,61 @@ export class WizardStateService {
   setDevelopmentalStage(developmentalStage: string): void {
     this._state.update(s => ({ ...s, developmentalStage }));
   }
+
+  // ============ Step 2: Dynamic Column Defaults ============
+
+  /**
+   * Set a dynamic column default value.
+   */
+  setColumnDefault(columnName: string, value: string, ontologyTerm?: OntologyTerm): void {
+    this._state.update(s => {
+      const defaults = [...s.dynamicColumnDefaults];
+      const existingIndex = defaults.findIndex(d => d.columnName === columnName);
+
+      if (existingIndex >= 0) {
+        defaults[existingIndex] = { columnName, value, ontologyTerm };
+      } else {
+        defaults.push({ columnName, value, ontologyTerm });
+      }
+
+      return { ...s, dynamicColumnDefaults: defaults };
+    });
+  }
+
+  /**
+   * Get a dynamic column default value.
+   */
+  getColumnDefault(columnName: string): DynamicColumnDefault | undefined {
+    return this._state().dynamicColumnDefaults.find(d => d.columnName === columnName);
+  }
+
+  /**
+   * Remove a dynamic column default.
+   */
+  removeColumnDefault(columnName: string): void {
+    this._state.update(s => ({
+      ...s,
+      dynamicColumnDefaults: s.dynamicColumnDefaults.filter(d => d.columnName !== columnName),
+    }));
+  }
+
+  /**
+   * Clear all dynamic column defaults.
+   */
+  clearColumnDefaults(): void {
+    this._state.update(s => ({ ...s, dynamicColumnDefaults: [] }));
+  }
+
+  // ============ Template Type Helpers ============
+
+  /** Check if current template is human */
+  readonly isHumanTemplate = computed(() => isHumanTemplate(this._state().template));
+
+  /** Check if current template is cell line */
+  readonly isCellLineTemplate = computed(() => isCellLineTemplate(this._state().template));
+
+  /** Check if current template is vertebrate */
+  readonly isVertebrateTemplate = computed(() => isVertebrateTemplate(this._state().template));
 
   // ============ Step 3: Sample Values ============
 
@@ -520,14 +580,18 @@ export class WizardStateService {
   // ============ Helpers ============
 
   /**
-   * Create a default sample entry.
+   * Ensure samples array is populated to match sampleCount.
+   * Call this when reaching step 3 to handle edge cases.
    */
-  private createDefaultSample(index: number): WizardSampleEntry {
-    return {
-      index,
-      sourceName: `sample_${index}`,
-      biologicalReplicate: 1,
-    };
+  ensureSamplesInitialized(): void {
+    this._state.update(s => {
+      if (s.samples.length >= s.sampleCount) return s;
+      const samples = [...s.samples];
+      while (samples.length < s.sampleCount) {
+        samples.push(createDefaultSample(samples.length + 1));
+      }
+      return { ...s, samples };
+    });
   }
 
   /**

@@ -1,7 +1,7 @@
 /**
  * Data Files Component (Step 6)
  *
- * File naming pattern and data file mapping.
+ * File naming pattern and data file mapping with multiple import options.
  */
 
 import {
@@ -16,7 +16,25 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
 import { WizardStateService } from '../../../core/services/wizard-state.service';
-import { WizardDataFile, LABEL_CONFIGS } from '../../../core/models/wizard';
+import { WizardDataFile, WizardSampleEntry, LABEL_CONFIGS } from '../../../core/models/wizard';
+
+/**
+ * Import mode for data files.
+ */
+type ImportMode = 'pattern' | 'paste' | 'mapping';
+
+/**
+ * Mapping result for auto-mapping.
+ */
+interface MappingResult {
+  fileName: string;
+  sampleIndex: number | null;
+  sampleName: string | null;
+  fractionId: number | null;
+  label: string | null;
+  confidence: 'high' | 'medium' | 'low' | 'unmatched';
+  matchReason?: string;
+}
 
 @Component({
   selector: 'wizard-data-files',
@@ -28,44 +46,232 @@ import { WizardDataFile, LABEL_CONFIGS } from '../../../core/models/wizard';
       <div class="step-header">
         <h3>Data Files</h3>
         <p class="step-description">
-          Specify how your data files are named and map them to samples.
+          Specify your data files using one of the methods below.
         </p>
       </div>
 
-      <!-- File Naming Strategy -->
-      <div class="form-section">
-        <label class="form-label">
-          File Naming Pattern
-          <span class="help-text">
-            Use placeholders: {{ '{' }}sourceName{{ '}' }}, {{ '{' }}n{{ '}' }} (sample number), {{ '{' }}fraction{{ '}' }}, {{ '{' }}replicate{{ '}' }}, {{ '{' }}label{{ '}' }}
-          </span>
-        </label>
-
-        <input
-          type="text"
-          class="form-input"
-          [ngModel]="state().fileNamingPattern"
-          (ngModelChange)="wizardState.setFileNamingPattern($event)"
-          [placeholder]="'{sourceName}.raw'"
-        />
-
-        <div class="pattern-examples">
-          <span class="examples-label">Examples:</span>
-          <button class="pattern-btn" (click)="setPattern('{sourceName}.raw')">{{ '{' }}sourceName{{ '}' }}.raw</button>
-          <button class="pattern-btn" (click)="setPattern('sample_{n}_F{fraction}.raw')">sample_{{ '{' }}n{{ '}' }}_F{{ '{' }}fraction{{ '}' }}.raw</button>
-          <button class="pattern-btn" (click)="setPattern('{sourceName}_{fraction}_{replicate}.raw')">{{ '{' }}sourceName{{ '}' }}_{{ '{' }}fraction{{ '}' }}_{{ '{' }}replicate{{ '}' }}.raw</button>
-        </div>
-      </div>
-
-      <!-- Auto-generate button -->
-      <div class="generate-section">
-        <button class="generate-btn" (click)="autoGenerate()">
-          Auto-generate Files from Pattern
+      <!-- Import Mode Tabs -->
+      <div class="import-tabs">
+        <button
+          class="tab-btn"
+          [class.active]="importMode() === 'pattern'"
+          (click)="importMode.set('pattern')"
+        >
+          Auto-generate
         </button>
-        <span class="generate-info">
-          Will create {{ expectedFileCount() }} file entries based on your configuration
-        </span>
+        <button
+          class="tab-btn"
+          [class.active]="importMode() === 'paste'"
+          (click)="importMode.set('paste')"
+        >
+          Paste File List
+        </button>
+        <button
+          class="tab-btn"
+          [class.active]="importMode() === 'mapping'"
+          (click)="importMode.set('mapping')"
+        >
+          Import Mapping
+        </button>
       </div>
+
+      <!-- Pattern Mode -->
+      @if (importMode() === 'pattern') {
+        <div class="mode-content">
+          <div class="form-section">
+            <label class="form-label">
+              File Naming Pattern
+              <span class="help-text">
+                Use placeholders: {{ '{' }}sourceName{{ '}' }}, {{ '{' }}n{{ '}' }} (sample number), {{ '{' }}fraction{{ '}' }}, {{ '{' }}replicate{{ '}' }}, {{ '{' }}label{{ '}' }}
+              </span>
+            </label>
+
+            <input
+              type="text"
+              class="form-input"
+              [ngModel]="state().fileNamingPattern"
+              (ngModelChange)="wizardState.setFileNamingPattern($event)"
+              [placeholder]="'{sourceName}.raw'"
+            />
+
+            <div class="pattern-examples">
+              <span class="examples-label">Examples:</span>
+              <button class="pattern-btn" (click)="setPattern('{sourceName}.raw')">{{ '{' }}sourceName{{ '}' }}.raw</button>
+              <button class="pattern-btn" (click)="setPattern('sample_{n}_F{fraction}.raw')">sample_{{ '{' }}n{{ '}' }}_F{{ '{' }}fraction{{ '}' }}.raw</button>
+              <button class="pattern-btn" (click)="setPattern('{sourceName}_{fraction}_{replicate}.raw')">{{ '{' }}sourceName{{ '}' }}_{{ '{' }}fraction{{ '}' }}_{{ '{' }}replicate{{ '}' }}.raw</button>
+            </div>
+          </div>
+
+          <div class="generate-section">
+            <button class="generate-btn" (click)="autoGenerate()">
+              Auto-generate Files from Pattern
+            </button>
+            <span class="generate-info">
+              Will create {{ expectedFileCount() }} file entries based on your configuration
+            </span>
+          </div>
+        </div>
+      }
+
+      <!-- Paste Mode -->
+      @if (importMode() === 'paste') {
+        <div class="mode-content">
+          <div class="form-section">
+            <label class="form-label">
+              Paste File Names
+              <span class="help-text">
+                One file name per line. We'll try to auto-match them to your samples.
+              </span>
+            </label>
+
+            <textarea
+              class="form-textarea"
+              rows="8"
+              [ngModel]="pastedFileList()"
+              (ngModelChange)="pastedFileList.set($event)"
+              placeholder="sample1.raw
+sample2.raw
+sample3_F1.raw
+sample3_F2.raw
+..."
+            ></textarea>
+
+            <div class="paste-actions">
+              <button
+                class="action-btn primary"
+                [disabled]="!pastedFileList().trim()"
+                (click)="parseAndMapFiles()"
+              >
+                Parse & Auto-Map Files
+              </button>
+              <span class="action-hint">
+                {{ countPastedLines() }} file(s) detected
+              </span>
+            </div>
+          </div>
+
+          <!-- Auto-mapping Results -->
+          @if (mappingResults().length > 0) {
+            <div class="mapping-results">
+              <div class="results-header">
+                <h4>Mapping Results</h4>
+                <div class="results-stats">
+                  <span class="stat matched">{{ countMatched() }} matched</span>
+                  <span class="stat unmatched">{{ countUnmatched() }} unmatched</span>
+                </div>
+              </div>
+
+              <div class="results-table-container">
+                <table class="results-table">
+                  <thead>
+                    <tr>
+                      <th>File Name</th>
+                      <th>Mapped Sample</th>
+                      <th>Fraction</th>
+                      <th>Confidence</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (result of mappingResults(); track result.fileName; let i = $index) {
+                      <tr [class.unmatched]="result.confidence === 'unmatched'">
+                        <td class="file-name">{{ result.fileName }}</td>
+                        <td>
+                          <select
+                            class="cell-select"
+                            [ngModel]="result.sampleIndex"
+                            (ngModelChange)="updateMappingResult(i, 'sampleIndex', $event)"
+                          >
+                            <option [ngValue]="null">-- Select Sample --</option>
+                            @for (sample of wizardState.samples(); track sample.index) {
+                              <option [ngValue]="sample.index">{{ sample.sourceName }}</option>
+                            }
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            class="cell-input fraction-input"
+                            [ngModel]="result.fractionId"
+                            (ngModelChange)="updateMappingResult(i, 'fractionId', $event)"
+                            min="1"
+                            placeholder="-"
+                          />
+                        </td>
+                        <td>
+                          <span class="confidence-badge" [class]="result.confidence">
+                            {{ result.confidence }}
+                          </span>
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="mapping-actions">
+                <button
+                  class="action-btn primary"
+                  [disabled]="countUnmatched() > 0"
+                  (click)="applyMapping()"
+                >
+                  Apply Mapping
+                </button>
+                <button class="action-btn secondary" (click)="clearMapping()">
+                  Clear
+                </button>
+                @if (countUnmatched() > 0) {
+                  <span class="action-warning">Please map all files before applying</span>
+                }
+              </div>
+            </div>
+          }
+        </div>
+      }
+
+      <!-- Mapping File Mode -->
+      @if (importMode() === 'mapping') {
+        <div class="mode-content">
+          <div class="form-section">
+            <label class="form-label">
+              Import Mapping File (TSV)
+              <span class="help-text">
+                Paste a TSV with columns: sample_name, file_name, [channel], [fraction_index]
+              </span>
+            </label>
+
+            <textarea
+              class="form-textarea"
+              rows="8"
+              [ngModel]="mappingTsv()"
+              (ngModelChange)="mappingTsv.set($event)"
+              placeholder="sample_name&#9;file_name&#9;channel&#9;fraction_index
+sample1&#9;sample1_F1.raw&#9;&#9;1
+sample1&#9;sample1_F2.raw&#9;&#9;2
+sample2&#9;sample2_F1.raw&#9;TMT126&#9;1
+..."
+            ></textarea>
+
+            <div class="paste-actions">
+              <button
+                class="action-btn primary"
+                [disabled]="!mappingTsv().trim()"
+                (click)="parseMappingTsv()"
+              >
+                Parse Mapping File
+              </button>
+              <span class="action-hint">
+                Columns: sample_name (required), file_name (required), channel (optional), fraction_index (optional)
+              </span>
+            </div>
+          </div>
+
+          @if (tsvParseError()) {
+            <div class="parse-error">
+              {{ tsvParseError() }}
+            </div>
+          }
+        </div>
+      }
 
       <!-- Generated Files Preview -->
       @if (state().dataFiles.length > 0) {
@@ -104,9 +310,27 @@ import { WizardDataFile, LABEL_CONFIGS } from '../../../core/models/wizard';
                         (ngModelChange)="updateFile(i, 'fileName', $event)"
                       />
                     </td>
-                    <td>{{ getSampleName(file.sampleIndex) }}</td>
+                    <td>
+                      <select
+                        class="cell-select"
+                        [ngModel]="file.sampleIndex"
+                        (ngModelChange)="updateFile(i, 'sampleIndex', $event)"
+                      >
+                        @for (sample of wizardState.samples(); track sample.index) {
+                          <option [ngValue]="sample.index">{{ sample.sourceName }}</option>
+                        }
+                      </select>
+                    </td>
                     @if (hasFractions()) {
-                      <td>{{ file.fractionId || '-' }}</td>
+                      <td>
+                        <input
+                          type="number"
+                          class="cell-input fraction-input"
+                          [ngModel]="file.fractionId"
+                          (ngModelChange)="updateFile(i, 'fractionId', $event)"
+                          min="1"
+                        />
+                      </td>
                     }
                     @if (hasTechReplicates()) {
                       <td>{{ file.technicalReplicate || '-' }}</td>
@@ -123,7 +347,7 @@ import { WizardDataFile, LABEL_CONFIGS } from '../../../core/models/wizard';
             </table>
           </div>
 
-          @if (state().dataFiles.length > maxDisplayed) {
+          @if (state().dataFiles.length > maxDisplayed && !showAll()) {
             <div class="more-files">
               Showing {{ maxDisplayed }} of {{ state().dataFiles.length }} files.
               <button class="show-more-btn" (click)="showAll.set(true)">Show all</button>
@@ -168,7 +392,7 @@ import { WizardDataFile, LABEL_CONFIGS } from '../../../core/models/wizard';
   `,
   styles: [`
     .step-container {
-      max-width: 800px;
+      max-width: 900px;
     }
 
     .step-header {
@@ -186,6 +410,41 @@ import { WizardDataFile, LABEL_CONFIGS } from '../../../core/models/wizard';
       margin: 0;
       color: #6b7280;
       font-size: 14px;
+    }
+
+    /* Import Tabs */
+    .import-tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 20px;
+      border-bottom: 2px solid #e5e7eb;
+      padding-bottom: 0;
+    }
+
+    .tab-btn {
+      padding: 10px 20px;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      font-size: 14px;
+      font-weight: 500;
+      color: #6b7280;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .tab-btn:hover {
+      color: #374151;
+    }
+
+    .tab-btn.active {
+      color: #3b82f6;
+      border-bottom-color: #3b82f6;
+    }
+
+    .mode-content {
+      padding: 16px 0;
     }
 
     .form-section {
@@ -220,6 +479,23 @@ import { WizardDataFile, LABEL_CONFIGS } from '../../../core/models/wizard';
 
     .form-input:focus,
     .form-select:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+
+    .form-textarea {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: monospace;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    .form-textarea:focus {
       outline: none;
       border-color: #3b82f6;
       box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
@@ -287,6 +563,203 @@ import { WizardDataFile, LABEL_CONFIGS } from '../../../core/models/wizard';
       color: #166534;
     }
 
+    /* Paste Actions */
+    .paste-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-top: 12px;
+    }
+
+    .action-btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .action-btn.primary {
+      background: #3b82f6;
+      color: white;
+    }
+
+    .action-btn.primary:hover:not(:disabled) {
+      background: #2563eb;
+    }
+
+    .action-btn.secondary {
+      background: #f3f4f6;
+      color: #374151;
+      border: 1px solid #d1d5db;
+    }
+
+    .action-btn.secondary:hover {
+      background: #e5e7eb;
+    }
+
+    .action-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .action-hint {
+      font-size: 13px;
+      color: #6b7280;
+    }
+
+    .action-warning {
+      font-size: 13px;
+      color: #dc2626;
+    }
+
+    /* Mapping Results */
+    .mapping-results {
+      margin-top: 20px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .results-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      background: #f9fafb;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .results-header h4 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #374151;
+    }
+
+    .results-stats {
+      display: flex;
+      gap: 12px;
+    }
+
+    .stat {
+      font-size: 12px;
+      font-weight: 500;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .stat.matched {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .stat.unmatched {
+      background: #fef2f2;
+      color: #dc2626;
+    }
+
+    .results-table-container {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .results-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .results-table th,
+    .results-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #e5e7eb;
+      text-align: left;
+      font-size: 13px;
+    }
+
+    .results-table th {
+      background: #f9fafb;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      position: sticky;
+      top: 0;
+    }
+
+    .results-table tr.unmatched {
+      background: #fef2f2;
+    }
+
+    .file-name {
+      font-family: monospace;
+      font-size: 12px;
+    }
+
+    .cell-select {
+      padding: 6px 8px;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      font-size: 13px;
+      min-width: 150px;
+    }
+
+    .fraction-input {
+      width: 60px;
+    }
+
+    .confidence-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+    }
+
+    .confidence-badge.high {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .confidence-badge.medium {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .confidence-badge.low {
+      background: #fed7aa;
+      color: #9a3412;
+    }
+
+    .confidence-badge.unmatched {
+      background: #fecaca;
+      color: #991b1b;
+    }
+
+    .mapping-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: #f9fafb;
+      border-top: 1px solid #e5e7eb;
+    }
+
+    .parse-error {
+      margin-top: 12px;
+      padding: 12px;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      color: #dc2626;
+      font-size: 13px;
+    }
+
+    /* Files Section */
     .files-section {
       margin-bottom: 24px;
     }
@@ -495,6 +968,15 @@ import { WizardDataFile, LABEL_CONFIGS } from '../../../core/models/wizard';
       .add-row .form-select {
         width: 100%;
       }
+
+      .import-tabs {
+        flex-wrap: wrap;
+      }
+
+      .tab-btn {
+        flex: 1;
+        text-align: center;
+      }
     }
   `],
 })
@@ -506,6 +988,13 @@ export class DataFilesComponent {
 
   readonly maxDisplayed = 20;
   readonly showAll = signal(false);
+
+  // Import mode state
+  readonly importMode = signal<ImportMode>('pattern');
+  readonly pastedFileList = signal('');
+  readonly mappingTsv = signal('');
+  readonly mappingResults = signal<MappingResult[]>([]);
+  readonly tsvParseError = signal<string | null>(null);
 
   // Manual add fields
   newFileName = '';
@@ -590,5 +1079,237 @@ export class DataFilesComponent {
     this.wizardState.setDataFiles(files);
 
     this.newFileName = '';
+  }
+
+  // === Paste Mode Methods ===
+
+  countPastedLines(): number {
+    const text = this.pastedFileList().trim();
+    if (!text) return 0;
+    return text.split('\n').filter(line => line.trim()).length;
+  }
+
+  countMatched(): number {
+    return this.mappingResults().filter(r => r.sampleIndex !== null).length;
+  }
+
+  countUnmatched(): number {
+    return this.mappingResults().filter(r => r.sampleIndex === null).length;
+  }
+
+  parseAndMapFiles(): void {
+    const text = this.pastedFileList().trim();
+    if (!text) return;
+
+    const fileNames = text.split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+
+    const samples = this.wizardState.samples();
+    const results: MappingResult[] = [];
+
+    for (const fileName of fileNames) {
+      const result = this.autoMapFile(fileName, samples);
+      results.push(result);
+    }
+
+    this.mappingResults.set(results);
+  }
+
+  /**
+   * Auto-map a file name to a sample based on various heuristics.
+   */
+  private autoMapFile(fileName: string, samples: WizardSampleEntry[]): MappingResult {
+    const result: MappingResult = {
+      fileName,
+      sampleIndex: null,
+      sampleName: null,
+      fractionId: null,
+      label: null,
+      confidence: 'unmatched',
+    };
+
+    // Extract base name without extension
+    const baseName = fileName.replace(/\.(raw|mzml|mzxml|mgf|d|wiff)$/i, '').toLowerCase();
+
+    // Try to extract fraction from filename (e.g., F1, F01, _1_, fraction1)
+    const fractionMatch = baseName.match(/(?:_f|_fraction|[-_]f)(\d+)/i) ||
+                          baseName.match(/[-_](\d+)(?:[-_]|$)/);
+    if (fractionMatch) {
+      result.fractionId = parseInt(fractionMatch[1], 10);
+    }
+
+    // Try exact match first
+    for (const sample of samples) {
+      const sampleNameLower = sample.sourceName.toLowerCase();
+      if (baseName === sampleNameLower || baseName.startsWith(sampleNameLower + '_') ||
+          baseName.startsWith(sampleNameLower + '-') || baseName.startsWith(sampleNameLower + '.')) {
+        result.sampleIndex = sample.index;
+        result.sampleName = sample.sourceName;
+        result.confidence = 'high';
+        result.matchReason = 'Exact prefix match';
+        return result;
+      }
+    }
+
+    // Try contains match
+    for (const sample of samples) {
+      const sampleNameLower = sample.sourceName.toLowerCase();
+      if (baseName.includes(sampleNameLower)) {
+        result.sampleIndex = sample.index;
+        result.sampleName = sample.sourceName;
+        result.confidence = 'medium';
+        result.matchReason = 'Contains sample name';
+        return result;
+      }
+    }
+
+    // Try sample index match (e.g., sample_1, s1, 01)
+    const indexMatch = baseName.match(/(?:sample[-_]?|s)(\d+)/i) ||
+                       baseName.match(/^(\d+)[-_]/);
+    if (indexMatch) {
+      const matchedIndex = parseInt(indexMatch[1], 10);
+      const sample = samples.find(s => s.index === matchedIndex);
+      if (sample) {
+        result.sampleIndex = sample.index;
+        result.sampleName = sample.sourceName;
+        result.confidence = 'low';
+        result.matchReason = 'Index pattern match';
+        return result;
+      }
+    }
+
+    return result;
+  }
+
+  updateMappingResult(index: number, field: 'sampleIndex' | 'fractionId', value: any): void {
+    const results = [...this.mappingResults()];
+    if (index >= 0 && index < results.length) {
+      results[index] = { ...results[index], [field]: value };
+
+      // Update sample name and confidence if sample was selected
+      if (field === 'sampleIndex' && value !== null) {
+        const sample = this.wizardState.samples().find(s => s.index === value);
+        results[index].sampleName = sample?.sourceName || null;
+        if (results[index].confidence === 'unmatched') {
+          results[index].confidence = 'low';
+          results[index].matchReason = 'Manual selection';
+        }
+      }
+
+      this.mappingResults.set(results);
+    }
+  }
+
+  clearMapping(): void {
+    this.mappingResults.set([]);
+  }
+
+  applyMapping(): void {
+    const results = this.mappingResults();
+    if (results.some(r => r.sampleIndex === null)) {
+      return; // Don't apply if there are unmatched files
+    }
+
+    const newFiles: WizardDataFile[] = results.map(r => ({
+      fileName: r.fileName,
+      sampleIndex: r.sampleIndex!,
+      fractionId: r.fractionId || undefined,
+      label: r.label || undefined,
+    }));
+
+    this.wizardState.setDataFiles(newFiles);
+    this.clearMapping();
+    this.pastedFileList.set('');
+  }
+
+  // === Mapping File Mode Methods ===
+
+  parseMappingTsv(): void {
+    const text = this.mappingTsv().trim();
+    if (!text) return;
+
+    this.tsvParseError.set(null);
+
+    try {
+      const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+      if (lines.length === 0) {
+        this.tsvParseError.set('No data found in the mapping file.');
+        return;
+      }
+
+      // Parse header
+      const headerLine = lines[0].toLowerCase();
+      const headers = headerLine.split('\t').map(h => h.trim());
+
+      // Find column indices
+      const sampleNameIndex = headers.findIndex(h =>
+        h === 'sample_name' || h === 'sample name' || h === 'samplename' || h === 'source name' || h === 'source_name'
+      );
+      const fileNameIndex = headers.findIndex(h =>
+        h === 'file_name' || h === 'file name' || h === 'filename' || h === 'data file' || h === 'data_file'
+      );
+      const channelIndex = headers.findIndex(h =>
+        h === 'channel' || h === 'label' || h === 'tag'
+      );
+      const fractionIndex = headers.findIndex(h =>
+        h === 'fraction_index' || h === 'fraction' || h === 'fraction_id' || h === 'fractionid'
+      );
+
+      if (sampleNameIndex === -1) {
+        this.tsvParseError.set('Required column "sample_name" not found. Expected columns: sample_name, file_name, [channel], [fraction_index]');
+        return;
+      }
+
+      if (fileNameIndex === -1) {
+        this.tsvParseError.set('Required column "file_name" not found. Expected columns: sample_name, file_name, [channel], [fraction_index]');
+        return;
+      }
+
+      // Parse data rows
+      const samples = this.wizardState.samples();
+      const newFiles: WizardDataFile[] = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split('\t').map(c => c.trim());
+
+        const sampleName = cols[sampleNameIndex] || '';
+        const fileName = cols[fileNameIndex] || '';
+        const channel = channelIndex >= 0 ? cols[channelIndex] : undefined;
+        const fraction = fractionIndex >= 0 ? cols[fractionIndex] : undefined;
+
+        if (!fileName) continue;
+
+        // Find matching sample
+        const sample = samples.find(s =>
+          s.sourceName.toLowerCase() === sampleName.toLowerCase()
+        );
+
+        if (!sample) {
+          this.tsvParseError.set(`Sample "${sampleName}" on line ${i + 1} not found. Available samples: ${samples.map(s => s.sourceName).join(', ')}`);
+          return;
+        }
+
+        newFiles.push({
+          fileName,
+          sampleIndex: sample.index,
+          fractionId: fraction ? parseInt(fraction, 10) : undefined,
+          label: channel || undefined,
+        });
+      }
+
+      if (newFiles.length === 0) {
+        this.tsvParseError.set('No valid file entries found in the mapping file.');
+        return;
+      }
+
+      // Apply the mapping
+      this.wizardState.setDataFiles(newFiles);
+      this.mappingTsv.set('');
+      this.tsvParseError.set(null);
+
+    } catch (error) {
+      this.tsvParseError.set(`Error parsing mapping file: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 }
