@@ -83,6 +83,27 @@ const BUFFER_ROWS = 10;
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="sdrf-editor" [class.loading]="loading()">
+      <!-- Collapsible Top Banner -->
+      @if (table()) {
+        <div class="top-banner" [class.collapsed]="bannerCollapsed()">
+          @if (!bannerCollapsed()) {
+            <div class="banner-content">
+              <div class="banner-left">
+                <h1 class="banner-title">SDRF Editor</h1>
+                <p class="banner-subtitle">Sample and Data Relationship Format editor for proteomics metadata</p>
+              </div>
+              <div class="banner-nav">
+                <a href="https://sdrf.quantms.org/" target="_blank" class="nav-link">SDRF Project</a>
+                <a href="https://sdrf.quantms.org/specification.html" target="_blank" class="nav-link">Specification</a>
+              </div>
+            </div>
+          }
+          <button class="banner-toggle" (click)="toggleBanner()" [title]="bannerCollapsed() ? 'Show banner' : 'Hide banner'">
+            {{ bannerCollapsed() ? '▼' : '▲' }}
+          </button>
+        </div>
+      }
+
       <!-- Toolbar -->
       <div class="sdrf-toolbar">
         <div class="toolbar-left">
@@ -569,9 +590,89 @@ const BUFFER_ROWS = 10;
           (applyBulkEdit)="onBulkEditColumn($event)"
         ></column-editor-panel>
       } @else if (!loading() && !error()) {
-        <div class="empty-state">
-          <p>No SDRF file loaded</p>
-          <p class="hint">Import a file or provide a URL to get started</p>
+        <!-- Enhanced Landing Page -->
+        <div class="landing-page">
+          <div class="landing-header">
+            <h1>SDRF Editor</h1>
+            <p class="tagline">Sample and Data Relationship Format editor for proteomics metadata</p>
+          </div>
+
+          <div class="landing-actions">
+            <button class="btn btn-primary btn-large" (click)="fileInput.click()">
+              📂 Import SDRF File
+            </button>
+            <button class="btn btn-create btn-large" (click)="openWizard()">
+              ✨ Create New SDRF
+            </button>
+          </div>
+
+          <div class="landing-content">
+            <div class="info-section">
+              <h2>What is SDRF?</h2>
+              <p>
+                The Sample and Data Relationship Format (SDRF) is a standardized format for annotating
+                proteomics experiments. It captures the relationships between samples, experimental design,
+                and data files in a structured, machine-readable way.
+              </p>
+              <p>
+                SDRF is part of the HUPO Proteomics Standards Initiative (PSI) and is widely used for
+                submitting proteomics data to public repositories like PRIDE and ProteomeXchange.
+              </p>
+            </div>
+
+            <div class="info-section">
+              <h2>Getting Started</h2>
+              <ul class="feature-list">
+                <li><strong>Import:</strong> Load an existing SDRF file (.tsv) from your computer</li>
+                <li><strong>Create:</strong> Build a new SDRF from scratch using our guided wizard</li>
+                <li><strong>Edit:</strong> Modify metadata with intelligent autocomplete and validation</li>
+                <li><strong>Validate:</strong> Check your SDRF against the official specification</li>
+                <li><strong>AI Assist:</strong> Get smart suggestions for filling and fixing metadata</li>
+              </ul>
+            </div>
+
+            <div class="info-section">
+              <h2>Resources</h2>
+              <div class="resource-links">
+                <a href="https://sdrf.quantms.org/" target="_blank" class="resource-link">
+                  <span class="link-icon">🏠</span>
+                  <div>
+                    <div class="link-title">SDRF Project</div>
+                    <div class="link-desc">Official SDRF documentation and examples</div>
+                  </div>
+                </a>
+                <a href="https://sdrf.quantms.org/specification.html" target="_blank" class="resource-link">
+                  <span class="link-icon">📋</span>
+                  <div>
+                    <div class="link-title">Specification</div>
+                    <div class="link-desc">Detailed format specification and rules</div>
+                  </div>
+                </a>
+                <a href="https://github.com/bigbio/proteomics-metadata-standard" target="_blank" class="resource-link">
+                  <span class="link-icon">💻</span>
+                  <div>
+                    <div class="link-title">GitHub Repository</div>
+                    <div class="link-desc">Source code, examples, and issue tracker</div>
+                  </div>
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <div class="landing-footer">
+            <p class="footer-text">Supported by the proteomics community</p>
+            <div class="partner-logos">
+              <a href="https://eubic-ms.org/" target="_blank" class="partner-logo" title="EuBIC-MS">
+                <img src="assets/images/eubic-logo.png" alt="EuBIC-MS Logo" class="logo-image">
+              </a>
+              <a href="https://psidev.info/" target="_blank" class="partner-logo" title="HUPO-PSI">
+                <img src="assets/images/psi-logo.png" alt="HUPO-PSI Logo" class="logo-image">
+              </a>
+              <a href="https://quantms.org/" target="_blank" class="partner-logo" title="QuantMS">
+                <img src="assets/images/quantms-logo.png" alt="QuantMS Logo" class="logo-image">
+              </a>
+            </div>
+          </div>
         </div>
       }
 
@@ -646,6 +747,257 @@ const BUFFER_ROWS = 10;
     sdrf-filter-bar {
       display: block;
       flex-shrink: 0;
+    }
+
+    /* Top Banner Styles */
+    .top-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 16px 24px;
+      border-bottom: 3px solid #5a67d8;
+      flex-shrink: 0;
+      transition: all 0.3s ease;
+    }
+
+    .top-banner.collapsed {
+      padding: 8px 24px;
+    }
+
+    .banner-content {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex: 1;
+      gap: 24px;
+    }
+
+    .banner-left {
+      flex: 1;
+    }
+
+    .banner-title {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    .banner-subtitle {
+      margin: 4px 0 0 0;
+      font-size: 13px;
+      opacity: 0.9;
+    }
+
+    .banner-nav {
+      display: flex;
+      gap: 16px;
+    }
+
+    .nav-link {
+      color: white;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.15);
+      transition: all 0.2s;
+    }
+
+    .nav-link:hover {
+      background: rgba(255, 255, 255, 0.25);
+      transform: translateY(-1px);
+    }
+
+    .banner-toggle {
+      background: rgba(255, 255, 255, 0.2);
+      border: none;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+      margin-left: 12px;
+    }
+
+    .banner-toggle:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    /* Landing Page Styles */
+    .landing-page {
+      flex: 1;
+      overflow-y: auto;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .landing-header {
+      text-align: center;
+      padding: 60px 40px 40px;
+    }
+
+    .landing-header h1 {
+      font-size: 48px;
+      margin: 0 0 16px 0;
+      font-weight: 700;
+      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+
+    .tagline {
+      font-size: 18px;
+      margin: 0;
+      opacity: 0.95;
+    }
+
+    .landing-actions {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      padding: 0 40px 40px;
+    }
+
+    .btn-large {
+      padding: 14px 32px;
+      font-size: 16px;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      transition: all 0.2s;
+    }
+
+    .btn-large:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    }
+
+    .landing-content {
+      flex: 1;
+      background: white;
+      color: #1f2937;
+      border-radius: 24px 24px 0 0;
+      padding: 48px 40px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 40px;
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .info-section h2 {
+      font-size: 22px;
+      margin: 0 0 16px 0;
+      color: #667eea;
+      font-weight: 600;
+    }
+
+    .info-section p {
+      margin: 0 0 12px 0;
+      line-height: 1.6;
+      color: #4b5563;
+    }
+
+    .feature-list {
+      margin: 0;
+      padding-left: 20px;
+      line-height: 1.8;
+    }
+
+    .feature-list li {
+      margin-bottom: 8px;
+      color: #4b5563;
+    }
+
+    .feature-list strong {
+      color: #1f2937;
+    }
+
+    .resource-links {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .resource-link {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px;
+      background: #f9fafb;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .resource-link:hover {
+      border-color: #667eea;
+      background: #f3f4f6;
+      transform: translateX(4px);
+    }
+
+    .link-icon {
+      font-size: 28px;
+      flex-shrink: 0;
+    }
+
+    .link-title {
+      font-weight: 600;
+      color: #1f2937;
+      margin-bottom: 2px;
+    }
+
+    .link-desc {
+      font-size: 12px;
+      color: #6b7280;
+    }
+
+    .landing-footer {
+      background: white;
+      padding: 32px 40px;
+      text-align: center;
+      border-top: 2px solid #e5e7eb;
+    }
+
+    .footer-text {
+      margin: 0 0 16px 0;
+      color: #6b7280;
+      font-size: 14px;
+    }
+
+    .partner-logos {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 48px;
+      flex-wrap: wrap;
+    }
+
+    .partner-logo {
+      text-decoration: none;
+      transition: all 0.3s;
+      display: block;
+    }
+
+    .partner-logo:hover {
+      transform: translateY(-4px);
+    }
+
+    .logo-image {
+      height: 60px;
+      width: auto;
+      object-fit: contain;
+      filter: grayscale(20%);
+      transition: filter 0.3s;
+    }
+
+    .logo-image:hover {
+      filter: grayscale(0%);
     }
 
     .sdrf-toolbar {
@@ -1832,6 +2184,9 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   /** Whether AI recommend panel is visible */
   showRecommendPanel = signal(false);
 
+  /** Whether top banner is collapsed */
+  bannerCollapsed = signal(false);
+
   /** Whether LLM settings dialog is visible */
   showLlmSettingsDialog = signal(false);
 
@@ -2538,6 +2893,10 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   toggleRecommendPanel(): void {
     this.showRecommendPanel.set(!this.showRecommendPanel());
+  }
+
+  toggleBanner(): void {
+    this.bannerCollapsed.set(!this.bannerCollapsed());
   }
 
   openLlmSettings(): void {
