@@ -5,7 +5,7 @@
  * Features:
  * - Slide-in sidebar like Stats panel
  * - Nicely rendered recommendations sorted by confidence
- * - Chat-like interface for user prompts
+ * - OLS-validated suggestions with auto-apply
  * - Advanced settings for power users
  */
 
@@ -33,10 +33,6 @@ import {
   AnalysisFocusArea,
   LlmError,
   getProviderDisplayName,
-  ChatSuggestion,
-  ChatMessage,
-  ParsedChatResponse,
-  generateSuggestionId,
 } from '../../core/models/llm';
 import {
   ActionableSuggestion,
@@ -105,7 +101,7 @@ export interface ApplyFixEvent {
 }
 
 type SortOption = 'confidence' | 'column' | 'type' | 'samples';
-type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
+type ViewTab = 'recommendations' | 'quality' | 'advanced';
 
 @Component({
   selector: 'sdrf-recommend-panel',
@@ -169,14 +165,6 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
             @if (result() && result()!.recommendations.length > 0) {
               <span class="tab-badge">{{ result()!.recommendations.length }}</span>
             }
-          </button>
-          <button
-            type="button"
-            class="tab"
-            [class.active]="activeTab() === 'chat'"
-            (click)="activeTab.set('chat')"
-          >
-            Chat
           </button>
           <button
             type="button"
@@ -415,6 +403,61 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                 </div>
               }
 
+              <!-- Validation Errors Section (from sdrf-pipelines validator) -->
+              @if (pyodideErrors().length > 0 && pyodideHasValidated()) {
+                <div class="validation-errors-section">
+                  <div class="section-header-line">
+                    <h3 class="section-title">
+                      🔍 Validation Errors
+                      <span class="error-count-badge">
+                        {{ pyodideErrorCount() }} error{{ pyodideErrorCount() !== 1 ? 's' : '' }}
+                        @if (pyodideWarningCount() > 0) {
+                          , {{ pyodideWarningCount() }} warning{{ pyodideWarningCount() !== 1 ? 's' : '' }}
+                        }
+                      </span>
+                    </h3>
+                  </div>
+                  <div class="validation-errors-list">
+                    @for (error of pyodideErrors().slice(0, 10); track $index) {
+                      <div class="validation-error-item" [class.error-level-warning]="error.level === 'warning'">
+                        <div class="error-level-badge" [class.level-error]="error.level === 'error'" [class.level-warning]="error.level === 'warning'">
+                          {{ error.level === 'error' ? '❌' : '⚠️' }}
+                        </div>
+                        <div class="error-content">
+                          <div class="error-message">{{ error.message }}</div>
+                          @if (error.column || error.row >= 0) {
+                            <div class="error-location">
+                              @if (error.column) {
+                                <span>{{ error.column }}</span>
+                              }
+                              @if (error.row >= 0) {
+                                <span>Row {{ error.row + 1 }}</span>
+                              }
+                              @if (error.value) {
+                                <span class="error-value">Value: "{{ error.value }}"</span>
+                              }
+                            </div>
+                          }
+                          @if (error.suggestion) {
+                            <div class="error-suggestion">💡 {{ error.suggestion }}</div>
+                          }
+                        </div>
+                        @if (error.column && error.row >= 0) {
+                          <button type="button" class="btn btn-xs btn-jump" (click)="jumpToValidationError(error)" title="Jump to cell">
+                            Jump
+                          </button>
+                        }
+                      </div>
+                    }
+                    @if (pyodideErrors().length > 10) {
+                      <div class="more-errors-notice">
+                        ... and {{ pyodideErrors().length - 10 }} more error{{ pyodideErrors().length - 10 !== 1 ? 's' : '' }}
+                      </div>
+                    }
+                  </div>
+                </div>
+              }
+
               <!-- Streaming Output (collapsible) -->
               @if (streamContent()) {
                 <details class="stream-section" [open]="analyzing()">
@@ -427,6 +470,14 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                   </summary>
                   <pre class="stream-output">{{ streamContent() }}</pre>
                 </details>
+              }
+
+              <!-- AI Recommendations Section -->
+              @if ((useActionableSuggestions() && pendingActionableSuggestions().length > 0) || (!useActionableSuggestions() && result())) {
+                <div class="ai-recommendations-header">
+                  <h3 class="section-title">✨ AI Recommendations</h3>
+                  <p class="section-subtitle">Suggestions based on validation results and AI knowledge</p>
+                </div>
               }
 
               <!-- Results - Actionable Suggestions (new system with OLS validation) -->
@@ -608,110 +659,6 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
                   }
                 </div>
               }
-            </div>
-          }
-
-          <!-- Chat Tab -->
-          @if (activeTab() === 'chat') {
-            <div class="chat-tab">
-              <div class="chat-messages">
-                @for (msg of chatMessages(); track $index) {
-                  <div class="chat-msg" [class]="'msg-' + msg.role">
-                    <div class="msg-role">{{ msg.role === 'user' ? 'You' : 'AI' }}</div>
-                    <div class="msg-content">{{ msg.content }}</div>
-
-                    <!-- Chat Suggestion Cards -->
-                    @if (msg.suggestions && msg.suggestions.length > 0) {
-                      <div class="chat-suggestions">
-                        @for (suggestion of msg.suggestions; track suggestion.id) {
-                          <div class="suggestion-card"
-                               [class.applied]="suggestion.applied"
-                               [class.dismissed]="suggestion.dismissed">
-                            <div class="suggestion-confidence-bar" [class]="'conf-' + suggestion.confidence"></div>
-                            <div class="suggestion-content">
-                              <div class="suggestion-desc">{{ suggestion.description }}</div>
-                              @if (suggestion.type === 'set_value' && suggestion.currentValue) {
-                                <div class="suggestion-change">
-                                  <span class="old-val">{{ suggestion.currentValue }}</span>
-                                  <span class="arrow">→</span>
-                                  <span class="new-val">{{ suggestion.suggestedValue }}</span>
-                                </div>
-                              }
-                              <div class="suggestion-meta">
-                                <span>{{ getSuggestionSampleLabel(suggestion) }}</span>
-                                <span class="conf-badge" [class]="'conf-' + suggestion.confidence">{{ suggestion.confidence }}</span>
-                              </div>
-                              <div class="suggestion-actions">
-                                @if (!suggestion.applied && !suggestion.dismissed) {
-                                  <button type="button" class="btn btn-primary btn-xs" (click)="applyChatSuggestion(suggestion, msg)">
-                                    Apply
-                                  </button>
-                                  <button type="button" class="btn btn-xs btn-muted" (click)="dismissChatSuggestion(suggestion, msg)">
-                                    Dismiss
-                                  </button>
-                                } @else if (suggestion.applied) {
-                                  <span class="applied-label">✓ Applied</span>
-                                } @else if (suggestion.dismissed) {
-                                  <span class="dismissed-label">Dismissed</span>
-                                }
-                              </div>
-                            </div>
-                          </div>
-                        }
-                      </div>
-                    }
-                  </div>
-                }
-                @if (chatMessages().length === 0) {
-                  <div class="chat-empty">
-                    <p>Ask questions or get actionable suggestions for your SDRF data.</p>
-                    <p class="hint">Try these examples:</p>
-                    <ul class="hint-list">
-                      <li (click)="sendChatMessage('What columns have the most issues?')">
-                        "What columns have the most issues?"
-                      </li>
-                      <li (click)="sendChatMessage('Change control to normal in the disease column')">
-                        "Change control to normal in disease column"
-                      </li>
-                      <li (click)="sendChatMessage('What should I put in developmental stage?')">
-                        "What should I put in developmental stage?"
-                      </li>
-                      <li (click)="sendChatMessage('Fix the inconsistent null values')">
-                        "Fix the inconsistent null values"
-                      </li>
-                    </ul>
-                  </div>
-                }
-                <!-- Streaming response while loading -->
-                @if (chatLoading() && chatStreamContent()) {
-                  <div class="chat-msg msg-assistant streaming">
-                    <div class="msg-role">AI</div>
-                    <div class="msg-content">{{ chatStreamContent() }}<span class="cursor">▋</span></div>
-                  </div>
-                }
-              </div>
-              <div class="chat-input-area">
-                <textarea
-                  class="chat-input"
-                  [value]="chatInput()"
-                  (input)="onChatInput($event)"
-                  (keydown.enter)="onChatEnter($event)"
-                  placeholder="Ask a question or request changes..."
-                  rows="2"
-                ></textarea>
-                <button
-                  type="button"
-                  class="btn btn-primary"
-                  [disabled]="!chatInput().trim() || chatLoading()"
-                  (click)="sendChatMessage()"
-                >
-                  @if (chatLoading()) {
-                    <span class="spinner-sm"></span>
-                  } @else {
-                    Send
-                  }
-                </button>
-              </div>
             </div>
           }
 
@@ -981,6 +928,136 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
       word-break: break-word;
     }
 
+    .validation-errors-section {
+      margin: 12px 16px;
+      padding: 12px;
+      background: #fef2f2;
+      border: 2px solid #fecaca;
+      border-radius: 8px;
+    }
+
+    .section-header-line {
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0;
+      color: #1f2937;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .error-count-badge {
+      font-size: 11px;
+      font-weight: 500;
+      background: #fee2e2;
+      color: #991b1b;
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+
+    .validation-errors-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .validation-error-item {
+      display: flex;
+      gap: 10px;
+      padding: 10px;
+      background: white;
+      border: 1px solid #fecaca;
+      border-radius: 6px;
+      align-items: flex-start;
+    }
+
+    .validation-error-item.error-level-warning {
+      background: #fffbeb;
+      border-color: #fde68a;
+    }
+
+    .error-level-badge {
+      font-size: 16px;
+      flex-shrink: 0;
+      width: 24px;
+      text-align: center;
+    }
+
+    .error-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .error-message {
+      font-size: 13px;
+      color: #1f2937;
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+
+    .error-location {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-size: 11px;
+      color: #6b7280;
+      margin-bottom: 4px;
+    }
+
+    .error-location span {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+
+    .error-value {
+      font-family: monospace;
+      color: #991b1b;
+    }
+
+    .error-suggestion {
+      font-size: 12px;
+      color: #059669;
+      margin-top: 4px;
+      padding: 4px 8px;
+      background: #d1fae5;
+      border-radius: 4px;
+    }
+
+    .btn-jump {
+      flex-shrink: 0;
+      font-size: 11px;
+    }
+
+    .more-errors-notice {
+      text-align: center;
+      font-size: 12px;
+      color: #6b7280;
+      padding: 8px;
+      background: white;
+      border-radius: 4px;
+    }
+
+    .ai-recommendations-header {
+      margin: 12px 16px 8px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #e5e7eb;
+    }
+
+    .ai-recommendations-header .section-title {
+      margin-bottom: 4px;
+    }
+
+    .section-subtitle {
+      font-size: 12px;
+      color: #6b7280;
+      margin: 0;
+    }
+
     .results-section {
       flex: 1;
       display: flex;
@@ -1168,184 +1245,6 @@ type ViewTab = 'recommendations' | 'quality' | 'chat' | 'advanced';
       color: #059669;
       font-size: 11px;
       font-weight: 500;
-    }
-
-    /* Chat Tab */
-    .chat-tab {
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-    }
-
-    .chat-messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 12px 16px;
-    }
-
-    .chat-empty {
-      color: #9ca3af;
-      font-size: 12px;
-    }
-
-    .chat-empty .hint { margin-top: 16px; font-weight: 500; color: #6b7280; }
-
-    .hint-list {
-      list-style: none;
-      padding: 0;
-      margin: 8px 0 0 0;
-    }
-
-    .hint-list li {
-      padding: 8px 12px;
-      background: #f3f4f6;
-      border-radius: 6px;
-      margin-bottom: 6px;
-      cursor: pointer;
-      font-style: italic;
-    }
-    .hint-list li:hover { background: #e5e7eb; }
-
-    .chat-msg {
-      margin-bottom: 12px;
-    }
-
-    .msg-role {
-      font-size: 10px;
-      font-weight: 600;
-      color: #6b7280;
-      margin-bottom: 4px;
-    }
-
-    .msg-content {
-      padding: 8px 12px;
-      border-radius: 8px;
-      font-size: 12px;
-      line-height: 1.5;
-    }
-
-    .msg-user .msg-content {
-      background: #667eea;
-      color: white;
-    }
-
-    .msg-assistant .msg-content {
-      background: #f3f4f6;
-      color: #374151;
-      white-space: pre-wrap;
-    }
-
-    /* Streaming cursor animation */
-    .chat-msg.streaming .cursor {
-      animation: blink 1s step-end infinite;
-      color: #667eea;
-    }
-
-    @keyframes blink {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0; }
-    }
-
-    /* Chat Suggestion Cards */
-    .chat-suggestions {
-      margin-top: 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .suggestion-card {
-      display: flex;
-      background: white;
-      border: 1px solid #e5e7eb;
-      border-radius: 8px;
-      overflow: hidden;
-      transition: opacity 0.2s;
-    }
-
-    .suggestion-card.applied {
-      opacity: 0.6;
-      background: #f0fdf4;
-      border-color: #86efac;
-    }
-
-    .suggestion-card.dismissed {
-      opacity: 0.5;
-      background: #fafafa;
-    }
-
-    .suggestion-confidence-bar {
-      width: 4px;
-      flex-shrink: 0;
-    }
-    .suggestion-confidence-bar.conf-high { background: #22c55e; }
-    .suggestion-confidence-bar.conf-medium { background: #f59e0b; }
-    .suggestion-confidence-bar.conf-low { background: #9ca3af; }
-
-    .suggestion-content {
-      flex: 1;
-      padding: 8px 10px;
-    }
-
-    .suggestion-desc {
-      font-size: 11px;
-      color: #374151;
-      margin-bottom: 4px;
-      font-weight: 500;
-    }
-
-    .suggestion-change {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-bottom: 4px;
-      flex-wrap: wrap;
-    }
-
-    .suggestion-meta {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 10px;
-      color: #9ca3af;
-      margin-bottom: 6px;
-    }
-
-    .conf-badge {
-      font-size: 9px;
-      padding: 1px 5px;
-      border-radius: 3px;
-    }
-    .conf-badge.conf-high { background: #d1fae5; color: #059669; }
-    .conf-badge.conf-medium { background: #fef3c7; color: #d97706; }
-    .conf-badge.conf-low { background: #f3f4f6; color: #6b7280; }
-
-    .suggestion-actions {
-      display: flex;
-      gap: 6px;
-    }
-
-    .dismissed-label {
-      color: #9ca3af;
-      font-size: 10px;
-    }
-
-    .chat-input-area {
-      display: flex;
-      gap: 8px;
-      padding: 12px 16px;
-      border-top: 1px solid #e5e7eb;
-      flex-shrink: 0;
-    }
-
-    .chat-input {
-      flex: 1;
-      padding: 8px 12px;
-      border: 1px solid #d1d5db;
-      border-radius: 6px;
-      font-size: 12px;
-      resize: none;
-      font-family: inherit;
     }
 
     /* Advanced Tab */
@@ -1877,13 +1776,6 @@ export class SdrfRecommendPanelComponent implements OnChanges, AfterViewInit {
   readonly isInitializing = signal(true);
   private hasInitialized = false;
 
-  /** Input to receive a message to send to the chat from external components */
-  @Input() set incomingChatMessage(message: string | null) {
-    if (message) {
-      this.receiveChatMessage(message);
-    }
-  }
-
   @Output() close = new EventEmitter<void>();
   @Output() openSettings = new EventEmitter<void>();
   @Output() applyRecommendation = new EventEmitter<ApplyRecommendationEvent>();
@@ -1907,18 +1799,13 @@ export class SdrfRecommendPanelComponent implements OnChanges, AfterViewInit {
   readonly sortBy = signal<SortOption>('confidence');
   readonly filterType = signal<RecommendationType | 'all'>('all');
 
-  // Chat state
-  readonly chatMessages = signal<ChatMessage[]>([]);
-  readonly chatInput = signal('');
-  readonly chatLoading = signal(false);
-  readonly examplesLoaded = signal(false);
-
   // Advanced options
   readonly includeSampleData = signal(true);
   readonly maxSampleRows = signal(10);
   readonly maxUniqueValues = signal(20);
   readonly customInstructions = signal('');
   readonly showRawOutput = signal(false);
+  readonly examplesLoaded = signal(false);
 
   // Quality state
   readonly qualityResult = signal<TableQualityResult | null>(null);
@@ -1929,7 +1816,7 @@ export class SdrfRecommendPanelComponent implements OnChanges, AfterViewInit {
   readonly pyodideValidating = signal(false);
   readonly pyodideErrors = signal<ValidationError[]>([]);
   readonly pyodideHasValidated = signal(false);
-  readonly selectedTemplates = signal<string[]>(['default']);
+  readonly selectedTemplates = signal<string[]>(['ms-proteomics']);
 
   // Dismissed recommendations
   private dismissedIds = new Set<string>();
@@ -1944,9 +1831,6 @@ export class SdrfRecommendPanelComponent implements OnChanges, AfterViewInit {
   private aiWorker: AiWorkerService;
   private enrichmentService: SuggestionEnrichmentService;
   private suggestionState: SuggestionStateService;
-
-  // Streaming chat content (shown while response is being generated)
-  readonly chatStreamContent = signal<string>('');
 
   // Actionable Suggestions State
   readonly actionableResult = signal<ActionableRecommendationResult | null>(null);
@@ -2256,6 +2140,7 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
 
   /**
    * Analyzes using the new actionable suggestions system with OLS validation.
+   * Includes validation errors from SDRF-pipelines validator in the AI prompt.
    */
   async analyzeActionable(): Promise<void> {
     if (!this.table || this.actionableAnalyzing()) return;
@@ -2271,10 +2156,22 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
     if (this.focusValidateOntology()) focusAreas.push('validate_ontology');
     if (this.focusCheckConsistency()) focusAreas.push('check_consistency');
 
+    // Get validation errors to include in AI analysis
+    const validatorErrors = this.pyodideErrors().map(e => ({
+      message: e.message,
+      level: e.level,
+      row: e.row,
+      column: e.column ?? undefined,
+      value: e.value ?? undefined,
+      suggestion: e.suggestion ?? undefined,
+    }));
+
     try {
       for await (const progress of this.recommendationService.analyzeActionableStreaming(
         this.table,
-        focusAreas
+        focusAreas,
+        undefined, // template
+        validatorErrors.length > 0 ? validatorErrors : undefined
       )) {
         if (progress.type === 'streaming') {
           this.streamContent.update(s => s + progress.content);
@@ -2320,10 +2217,6 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
 
       case 'preview':
         this.previewActionableSuggestion(suggestion);
-        break;
-
-      case 'chat':
-        this.explainSuggestionInChat(suggestion);
         break;
 
       case 'dismiss':
@@ -2393,35 +2286,6 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
   }
 
   /**
-   * Sends a suggestion to chat for explanation.
-   */
-  async explainSuggestionInChat(suggestion: ActionableSuggestion): Promise<void> {
-    // Switch to chat tab
-    this.activeTab.set('chat');
-
-    // Build the explanation prompt
-    const prompt = this.enrichmentService.buildExplanationPrompt(suggestion);
-
-    // Add user message showing what we're asking about
-    const userMessage = `Please explain this suggestion:\n\n` +
-      `**Column**: ${suggestion.column}\n` +
-      `**Change**: "${this.getFirstValue(suggestion.currentValues)}" → "${suggestion.suggestedValue}"\n` +
-      `**Confidence**: ${suggestion.confidence}`;
-
-    this.chatMessages.update(msgs => [...msgs, {
-      role: 'user',
-      content: userMessage,
-      timestamp: new Date()
-    }]);
-
-    // Link suggestion to chat
-    this.suggestionState.linkToChatMessage(suggestion.id, `chat_${Date.now()}`);
-
-    // Send the full prompt to the AI
-    await this.sendChatMessage(prompt);
-  }
-
-  /**
    * Handles selection of an OLS alternative from a suggestion card.
    */
   handleAlternativeSelected(event: { suggestion: ActionableSuggestion; alternative: OntologySuggestion }): void {
@@ -2480,30 +2344,6 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
   formatSamples(indices: number[]): string {
     if (indices.length <= 3) return indices.join(', ');
     return `${indices.slice(0, 3).join(', ')}...+${indices.length - 3}`;
-  }
-
-  /**
-   * Returns a label for how many samples a suggestion will affect.
-   * If the LLM only provided a few indices but no currentValue to match,
-   * indicate that it will apply to ALL samples.
-   */
-  getSuggestionSampleLabel(suggestion: ChatSuggestion): string {
-    const indices = suggestion.sampleIndices || [];
-    const noCurrentValue = !suggestion.currentValue || suggestion.currentValue.trim() === '';
-
-    // If few indices provided but no specific value to match, will apply to all
-    if (this.table && indices.length < 10 && noCurrentValue && this.table.sampleCount > 10) {
-      return `All ${this.table.sampleCount} samples`;
-    }
-
-    if (indices.length === 0) {
-      if (noCurrentValue && this.table) {
-        return `All ${this.table.sampleCount} samples`;
-      }
-      return 'Matching samples';
-    }
-
-    return `${indices.length} sample${indices.length > 1 ? 's' : ''}`;
   }
 
   onApplyClick(rec: SdrfRecommendation): void {
@@ -2723,11 +2563,21 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
   async initPyodide(): Promise<void> {
     try {
       await this.pyodideService.initialize();
-      // Auto-detect templates based on table content
+
+      const available = this.pyodideAvailableTemplates();
+      if (available.length === 0) return;
+
+      // Prefer auto-detected templates from table content; otherwise keep only valid names
       if (this.table) {
         const tsvContent = sdrfExport.exportToTsv(this.table);
         const detected = this.pyodideService.detectTemplates(tsvContent);
-        this.selectedTemplates.set(detected);
+        const valid = detected.filter(t => available.includes(t));
+        const fallback = available.includes('ms-proteomics') ? 'ms-proteomics' : available[0];
+        this.selectedTemplates.set(valid.length > 0 ? valid : [fallback]);
+      } else {
+        const current = this.selectedTemplates().filter(t => available.includes(t));
+        const fallback = available.includes('ms-proteomics') ? 'ms-proteomics' : available[0];
+        this.selectedTemplates.set(current.length > 0 ? current : [fallback]);
       }
     } catch (err) {
       console.error('Failed to initialize Pyodide:', err);
@@ -2758,14 +2608,31 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
         console.log(`[RecPanel Validate] First 3 TSV lines:`, lines);
       }
 
+      // Use only template names that exist in the loaded library/API list
+      const available = this.pyodideAvailableTemplates();
+      let templatesToUse = this.selectedTemplates().filter(t => available.includes(t));
+      if (templatesToUse.length === 0 && available.length > 0) {
+        const defaultTemplate = available.includes('ms-proteomics') ? 'ms-proteomics' : available[0];
+        templatesToUse = [defaultTemplate];
+        this.selectedTemplates.set(templatesToUse);
+      }
+
       // Run validation
       const errors = await this.pyodideService.validate(
         tsvContent,
-        this.selectedTemplates(),
+        templatesToUse,
         { skipOntology: true } // Skip ontology for speed
       );
 
       this.pyodideErrors.set(errors);
+
+      // Auto-trigger AI analysis if errors found and LLM provider is configured
+      if (errors.length > 0 && this.settingsService.isAnyProviderConfigured()) {
+        // Small delay to ensure UI updates
+        setTimeout(() => {
+          this.analyzeActionable();
+        }, 100);
+      }
     } catch (err) {
       console.error('Pyodide validation failed:', err);
       this.pyodideErrors.set([{
@@ -2834,494 +2701,6 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
 ${errors.length} issues found (${this.pyodideErrorCount()} errors, ${this.pyodideWarningCount()} warnings)
 ${errorLines.join('\n')}
 ${errors.length > 15 ? `...and ${errors.length - 15} more` : ''}`;
-  }
-
-  // Chat methods
-  onChatInput(event: Event): void {
-    this.chatInput.set((event.target as HTMLTextAreaElement).value);
-  }
-
-  onChatEnter(event: Event): void {
-    if (!(event as KeyboardEvent).shiftKey) {
-      event.preventDefault();
-      this.sendChatMessage();
-    }
-  }
-
-  async sendChatMessage(preset?: string): Promise<void> {
-    const message = preset || this.chatInput().trim();
-    if (!message || this.chatLoading() || !this.table) return;
-
-    this.chatInput.set('');
-    this.chatMessages.update(msgs => [...msgs, { role: 'user', content: message, timestamp: new Date() }]);
-    this.chatLoading.set(true);
-    this.chatStreamContent.set(''); // Reset streaming content
-
-    try {
-      // Build context about the current table state
-      const tableContext = this.buildTableContext();
-      const qualityContext = this.buildQualityContext();
-      const examplesContext = this.buildExamplesContext();
-      const validationContext = this.buildValidationContext();
-
-      // Build the enhanced system prompt (include validation errors in quality context)
-      const fullQualityContext = qualityContext + validationContext;
-      const systemPrompt = promptService.buildChatSystemPrompt(
-        tableContext,
-        fullQualityContext,
-        examplesContext
-      );
-
-      // Build chat messages for the LLM
-      const llmMessages = [
-        { role: 'system' as const, content: systemPrompt },
-        // Add previous chat messages for context (text only, without suggestions)
-        ...this.chatMessages().slice(-6).map(m => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content
-        })),
-        { role: 'user' as const, content: message }
-      ];
-
-      let responseContent = '';
-
-      // Use AI Worker for non-blocking streaming if available
-      if (this.aiWorker.isAvailable()) {
-        const providerType = this.settingsService.getActiveProvider();
-        const config = this.settingsService.getProviderConfig(providerType);
-
-        if (!config) {
-          throw new Error('AI provider is not configured');
-        }
-
-        // Stream the response through the worker
-        responseContent = await this.aiWorker.stream(
-          providerType,
-          config,
-          llmMessages,
-          (chunk) => {
-            // Update streaming content as chunks arrive
-            this.chatStreamContent.update(s => s + chunk);
-          }
-        );
-      } else {
-        // Fallback to direct provider call if worker unavailable
-        const provider = await this.recommendationService.getActiveProvider();
-        const response = await provider.complete(llmMessages);
-        responseContent = response.content || '';
-      }
-
-      // Clear streaming content now that we have the full response
-      this.chatStreamContent.set('');
-
-      // Parse the response for text and suggestions
-      const parsed = this.parseChatResponse(responseContent);
-
-      // Add the message with suggestions
-      this.chatMessages.update(msgs => [...msgs, {
-        role: 'assistant',
-        content: parsed.text,
-        suggestions: parsed.suggestions,
-        timestamp: new Date()
-      }]);
-    } catch (err) {
-      this.chatStreamContent.set(''); // Clear on error
-      const errorMsg = err instanceof Error ? err.message : 'Failed to get response';
-      this.chatMessages.update(msgs => [...msgs, {
-        role: 'assistant',
-        content: `Error: ${errorMsg}. Make sure your AI provider is configured correctly.`,
-        timestamp: new Date()
-      }]);
-    } finally {
-      this.chatLoading.set(false);
-    }
-  }
-
-  /**
-   * Receive a chat message from an external component (e.g., validation panel)
-   * Switches to chat tab and sends the message
-   */
-  receiveChatMessage(message: string): void {
-    // Switch to chat tab
-    this.activeTab.set('chat');
-
-    // Send the message after a small delay to ensure UI updates
-    setTimeout(() => {
-      this.sendChatMessage(message);
-    }, 100);
-  }
-
-  /**
-   * Parses the LLM response to extract text and suggestions.
-   * Handles multiple response formats:
-   * 1. Proper JSON with text and suggestions
-   * 2. JSON embedded in markdown code blocks
-   * 3. Mixed content with JSON at the end
-   * 4. Plain text with pattern-based extraction fallback
-   */
-  private parseChatResponse(content: string): ParsedChatResponse {
-    // Strategy 1: Try to parse as structured JSON
-    const jsonResult = this.tryParseJsonResponse(content);
-    if (jsonResult) {
-      return jsonResult;
-    }
-
-    // Strategy 2: Extract suggestions from plain text using patterns
-    const patternResult = this.extractSuggestionsFromText(content);
-    return patternResult;
-  }
-
-  /**
-   * Tries to parse the response as JSON in various formats.
-   */
-  private tryParseJsonResponse(content: string): ParsedChatResponse | null {
-    // Try multiple JSON extraction strategies
-    const jsonCandidates: string[] = [];
-
-    // Strategy 1: Extract from markdown code blocks
-    const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (codeBlockMatch) {
-      jsonCandidates.push(codeBlockMatch[1].trim());
-    }
-
-    // Strategy 2: Find raw JSON object (handles no code blocks)
-    const jsonStart = content.indexOf('{');
-    const jsonEnd = content.lastIndexOf('}');
-    if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
-      jsonCandidates.push(content.substring(jsonStart, jsonEnd + 1));
-    }
-
-    // Strategy 3: The entire content might be JSON
-    jsonCandidates.push(content.trim());
-
-    for (const jsonStr of jsonCandidates) {
-      try {
-        const parsed = JSON.parse(jsonStr);
-
-        if (parsed && typeof parsed.text === 'string') {
-          const suggestions = this.extractSuggestionsFromParsedJson(parsed);
-          return { text: parsed.text, suggestions };
-        }
-
-        // Handle alternative structures (e.g., { message: ..., suggestions: ... })
-        if (parsed && typeof parsed.message === 'string') {
-          const suggestions = this.extractSuggestionsFromParsedJson(parsed);
-          return { text: parsed.message, suggestions };
-        }
-
-        // Handle case where response is just { suggestions: [...] }
-        if (parsed && Array.isArray(parsed.suggestions) && parsed.suggestions.length > 0) {
-          const suggestions = this.extractSuggestionsFromParsedJson(parsed);
-          return { text: 'Here are my suggestions:', suggestions };
-        }
-      } catch (e) {
-        // This candidate didn't parse, try next
-        continue;
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Extracts ChatSuggestion array from parsed JSON.
-   */
-  private extractSuggestionsFromParsedJson(parsed: any): ChatSuggestion[] {
-    const suggestions: ChatSuggestion[] = [];
-
-    if (!Array.isArray(parsed.suggestions)) {
-      return suggestions;
-    }
-
-    for (const s of parsed.suggestions) {
-      if (!s || typeof s !== 'object') continue;
-
-      // Require at least type and column (or description for minimal suggestions)
-      if (typeof s.type !== 'string' && typeof s.description !== 'string') continue;
-
-      const suggestion: ChatSuggestion = {
-        id: generateSuggestionId(),
-        type: s.type || 'set_value',
-        column: s.column || s.columnName || '',
-        sampleIndices: this.parseSampleIndices(s.sampleIndices || s.samples || s.rows),
-        currentValue: s.currentValue || s.oldValue || s.from,
-        suggestedValue: s.suggestedValue || s.newValue || s.value || s.to,
-        newColumnName: s.newColumnName,
-        description: s.description || s.reason || `${s.type || 'Change'} for ${s.column || 'column'}`,
-        confidence: this.normalizeConfidence(s.confidence),
-        applied: false,
-        dismissed: false,
-      };
-
-      // Only add if we have enough info to act on it
-      if (suggestion.column || suggestion.description) {
-        suggestions.push(suggestion);
-      }
-    }
-
-    return suggestions;
-  }
-
-  /**
-   * Parses sample indices from various formats.
-   */
-  private parseSampleIndices(indices: any): number[] {
-    if (!indices) return [];
-    if (Array.isArray(indices)) {
-      return indices.filter(i => typeof i === 'number' || typeof i === 'string')
-        .map(i => typeof i === 'string' ? parseInt(i, 10) : i)
-        .filter(i => !isNaN(i));
-    }
-    if (typeof indices === 'string') {
-      // Handle "1-5" or "1,2,3" or "all"
-      if (indices.toLowerCase() === 'all') {
-        return this.table ? Array.from({ length: this.table.sampleCount }, (_, i) => i + 1) : [];
-      }
-      const nums: number[] = [];
-      for (const part of indices.split(',')) {
-        const trimmed = part.trim();
-        if (trimmed.includes('-')) {
-          const [start, end] = trimmed.split('-').map(Number);
-          if (!isNaN(start) && !isNaN(end)) {
-            for (let i = start; i <= end; i++) nums.push(i);
-          }
-        } else {
-          const num = parseInt(trimmed, 10);
-          if (!isNaN(num)) nums.push(num);
-        }
-      }
-      return nums;
-    }
-    return [];
-  }
-
-  /**
-   * Normalizes confidence values to expected format.
-   */
-  private normalizeConfidence(conf: any): RecommendationConfidence {
-    if (!conf) return 'medium';
-    const c = String(conf).toLowerCase();
-    if (c === 'high' || c === 'h' || c === '3') return 'high';
-    if (c === 'low' || c === 'l' || c === '1') return 'low';
-    return 'medium';
-  }
-
-  /**
-   * Extracts suggestions from plain text using pattern matching.
-   * This is a fallback when the LLM doesn't return JSON.
-   */
-  private extractSuggestionsFromText(content: string): ParsedChatResponse {
-    const suggestions: ChatSuggestion[] = [];
-    const lines = content.split('\n');
-
-    // Pattern 1: "change X to Y" or "replace X with Y"
-    const changePatterns = [
-      /(?:change|replace|update|set|fix)\s+["']?([^"']+)["']?\s+(?:to|with|as|→)\s+["']?([^"'.,]+)["']?/gi,
-      /["']([^"']+)["']\s*(?:should be|→|->|==>)\s*["']?([^"'.,]+)["']?/gi,
-    ];
-
-    // Pattern 2: Column-specific changes like "in disease column, use 'normal'"
-    const columnPatterns = [
-      /(?:in|for)\s+(?:the\s+)?["']?([^"']+)["']?\s+column[,\s]+(?:use|set|change to)\s+["']?([^"'.,]+)["']?/gi,
-      /(?:column|field)\s+["']?([^"']+)["']?[:\s]+["']?([^"'.,]+)["']?\s+(?:instead|recommended)/gi,
-    ];
-
-    // Pattern 3: Value recommendations like "'control' → 'normal'"
-    const arrowPattern = /["']([^"']+)["']\s*(?:→|->|==>|should be)\s*["']([^"']+)["']/gi;
-
-    // Detect column names in the text for association
-    const columnNames = this.table?.columns.map(c => c.name.toLowerCase()) || [];
-
-    // Try to extract suggestions from patterns
-    for (const pattern of [...changePatterns, ...columnPatterns, arrowPattern]) {
-      let match;
-      while ((match = pattern.exec(content)) !== null) {
-        const [, from, to] = match;
-        if (from && to && from.trim() !== to.trim()) {
-          // Try to find which column this applies to
-          let column = '';
-
-          // Check if 'from' value is found in any column
-          if (this.table) {
-            for (const col of this.table.columns) {
-              const colNameLower = col.name.toLowerCase();
-              // Check if the column name is mentioned near this match
-              const contextStart = Math.max(0, match.index - 50);
-              const contextEnd = Math.min(content.length, match.index + match[0].length + 50);
-              const context = content.substring(contextStart, contextEnd).toLowerCase();
-
-              if (context.includes(colNameLower) || context.includes(col.name)) {
-                column = col.name;
-                break;
-              }
-
-              // Check if column contains the 'from' value
-              const fromLower = from.toLowerCase().trim();
-              const hasValue = col.value?.toLowerCase().includes(fromLower) ||
-                col.modifiers.some(m => m.value?.toLowerCase().includes(fromLower));
-              if (hasValue) {
-                column = col.name;
-                break;
-              }
-            }
-          }
-
-          // Only create suggestion if we found a column or have a clear recommendation
-          if (column || from.toLowerCase().includes('control') || from.toLowerCase().includes('na')) {
-            // If no column found but it's a common fix, guess the column
-            if (!column && from.toLowerCase().includes('control')) {
-              column = 'characteristics[disease]';
-            }
-
-            suggestions.push({
-              id: generateSuggestionId(),
-              type: 'set_value',
-              column: column,
-              sampleIndices: [], // Will need manual specification or apply to all
-              currentValue: from.trim(),
-              suggestedValue: to.trim(),
-              description: `Change "${from.trim()}" to "${to.trim()}"${column ? ` in ${column}` : ''}`,
-              confidence: 'medium',
-              applied: false,
-              dismissed: false,
-            });
-          }
-        }
-      }
-    }
-
-    // Pattern 4: Look for bullet points with recommendations
-    const bulletPattern = /^[\s]*[-•*]\s*(.+)$/gm;
-    let bulletMatch;
-    while ((bulletMatch = bulletPattern.exec(content)) !== null) {
-      const bulletText = bulletMatch[1];
-      // Check if this bullet contains actionable content
-      for (const pattern of changePatterns) {
-        pattern.lastIndex = 0; // Reset regex
-        const innerMatch = pattern.exec(bulletText);
-        if (innerMatch) {
-          const [, from, to] = innerMatch;
-          if (from && to && !suggestions.some(s => s.currentValue === from.trim() && s.suggestedValue === to.trim())) {
-            suggestions.push({
-              id: generateSuggestionId(),
-              type: 'set_value',
-              column: '',
-              sampleIndices: [],
-              currentValue: from.trim(),
-              suggestedValue: to.trim(),
-              description: bulletText.trim(),
-              confidence: 'medium',
-              applied: false,
-              dismissed: false,
-            });
-          }
-        }
-      }
-    }
-
-    // Deduplicate suggestions
-    const uniqueSuggestions = this.deduplicateSuggestions(suggestions);
-
-    return { text: content, suggestions: uniqueSuggestions };
-  }
-
-  /**
-   * Removes duplicate suggestions.
-   */
-  private deduplicateSuggestions(suggestions: ChatSuggestion[]): ChatSuggestion[] {
-    const seen = new Set<string>();
-    return suggestions.filter(s => {
-      const key = `${s.column}:${s.currentValue}:${s.suggestedValue}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
-
-  /**
-   * Applies a chat suggestion to the table.
-   */
-  applyChatSuggestion(suggestion: ChatSuggestion, msg: ChatMessage): void {
-    if (!this.table || suggestion.applied) return;
-
-    console.log(`[ApplyChatSuggestion] Applying: column="${suggestion.column}", currentValue="${suggestion.currentValue}", suggestedValue="${suggestion.suggestedValue}", sampleIndices=${JSON.stringify(suggestion.sampleIndices)}`);
-
-    // Mark as applied
-    suggestion.applied = true;
-
-    // Determine sample indices to apply to
-    let sampleIndices = suggestion.sampleIndices || [];
-
-    // If the LLM only provided a few sample indices but the table has many more samples,
-    // and there's no specific currentValue to match against, apply to ALL samples.
-    // This handles cases like "add a placeholder value to all samples" where the LLM
-    // only saw a few rows in the context.
-    const hasLimitedIndices = sampleIndices.length > 0 && sampleIndices.length < 10;
-    const tableHasManyMoreSamples = this.table.sampleCount > sampleIndices.length * 10;
-    const noCurrentValueToMatch = !suggestion.currentValue || suggestion.currentValue.trim() === '';
-
-    if ((sampleIndices.length === 0 || (hasLimitedIndices && tableHasManyMoreSamples)) && noCurrentValueToMatch) {
-      // Apply to ALL samples - create array of 1-based indices
-      sampleIndices = Array.from({ length: this.table.sampleCount }, (_, i) => i + 1);
-      console.log(`[ApplyChatSuggestion] Expanded to ALL ${this.table.sampleCount} samples (LLM only suggested ${suggestion.sampleIndices?.length || 0})`);
-    }
-
-    // Handle add_column type - need to create the column first
-    if (suggestion.type === 'add_column' && suggestion.column) {
-      console.log(`[ApplyChatSuggestion] Add column: "${suggestion.column}" with value "${suggestion.suggestedValue}"`);
-      // Emit as a special recommendation type that the parent can handle
-      const recommendation: SdrfRecommendation = {
-        id: suggestion.id,
-        type: 'add_column',
-        column: suggestion.column,
-        columnIndex: -1, // New column
-        sampleIndices: sampleIndices,
-        currentValue: undefined,
-        suggestedValue: suggestion.suggestedValue || 'not available',
-        confidence: suggestion.confidence,
-        reasoning: suggestion.description,
-        applied: true,
-      };
-      console.log(`[ApplyChatSuggestion] Emitting add_column recommendation:`, recommendation);
-      this.applyRecommendation.emit({ recommendation });
-    }
-    // Handle set_value type
-    else if (suggestion.type === 'set_value' && suggestion.suggestedValue !== undefined) {
-      const columnIndex = this.findColumnIndex(suggestion.column);
-      console.log(`[ApplyChatSuggestion] Column index for "${suggestion.column}": ${columnIndex}`);
-      if (columnIndex !== -1) {
-        const recommendation: SdrfRecommendation = {
-          id: suggestion.id,
-          type: 'fill_value',
-          column: suggestion.column,
-          columnIndex,
-          sampleIndices: sampleIndices,
-          currentValue: suggestion.currentValue,
-          suggestedValue: suggestion.suggestedValue,
-          confidence: suggestion.confidence,
-          reasoning: suggestion.description,
-          applied: true,
-        };
-        console.log(`[ApplyChatSuggestion] Emitting recommendation:`, recommendation);
-        this.applyRecommendation.emit({ recommendation });
-      } else {
-        console.warn(`[ApplyChatSuggestion] Column "${suggestion.column}" not found in table`);
-      }
-    } else {
-      console.warn(`[ApplyChatSuggestion] Skipping: type="${suggestion.type}", suggestedValue="${suggestion.suggestedValue}"`);
-    }
-
-    // Trigger UI update
-    this.chatMessages.update(msgs => [...msgs]);
-  }
-
-  /**
-   * Dismisses a chat suggestion.
-   */
-  dismissChatSuggestion(suggestion: ChatSuggestion, msg: ChatMessage): void {
-    suggestion.dismissed = true;
-    // Trigger UI update
-    this.chatMessages.update(msgs => [...msgs]);
   }
 
   /**

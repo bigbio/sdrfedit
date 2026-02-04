@@ -64,6 +64,24 @@ const COLUMN_ONTOLOGY_MAP: Record<string, { ontologies: string[]; searchMethod?:
         }
       </div>
 
+      @if (getRecommendedOntologies().length > 0) {
+        <div class="ontology-filter">
+          <label class="filter-label">
+            <input
+              type="checkbox"
+              [checked]="!searchAllOntologies()"
+              (change)="toggleOntologyFilter()"
+            />
+            <span>Search in: {{ getOntologyLabel() }}</span>
+          </label>
+          @if (!searchAllOntologies()) {
+            <button class="expand-search-btn" (click)="searchAllOntologies.set(true)" title="Search in all ontologies">
+              Expand search
+            </button>
+          }
+        </div>
+      }
+
       @if (showDropdown() && suggestions().length > 0) {
         <div class="suggestions-dropdown">
           @for (suggestion of suggestions(); track suggestion.iri) {
@@ -239,6 +257,51 @@ const COLUMN_ONTOLOGY_MAP: Record<string, { ontologies: string[]; searchMethod?:
     .clear-btn:hover {
       color: #d32f2f;
     }
+
+    .ontology-filter {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 4px 8px;
+      font-size: 11px;
+      color: #666;
+      background: #f8f9fa;
+      border: 1px solid #e0e0e0;
+      border-top: none;
+      border-radius: 0 0 4px 4px;
+    }
+
+    .filter-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      margin: 0;
+      user-select: none;
+    }
+
+    .filter-label input[type="checkbox"] {
+      margin: 0;
+      cursor: pointer;
+    }
+
+    .expand-search-btn {
+      padding: 2px 8px;
+      font-size: 10px;
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      cursor: pointer;
+      color: #666;
+      transition: all 0.2s;
+    }
+
+    .expand-search-btn:hover {
+      background: #2196f3;
+      color: white;
+      border-color: #2196f3;
+    }
   `],
 })
 export class SdrfOntologyInputComponent implements OnInit, OnChanges {
@@ -273,6 +336,7 @@ export class SdrfOntologyInputComponent implements OnInit, OnChanges {
   showDropdown = signal(false);
   loading = signal(false);
   selectedIndex = signal(-1);
+  searchAllOntologies = signal(false);
 
   constructor(private elementRef: ElementRef) {}
 
@@ -383,8 +447,16 @@ export class SdrfOntologyInputComponent implements OnInit, OnChanges {
     try {
       let results: OntologySuggestion[];
 
-      // Use specialized search method if available
-      if (ontologyConfig.searchMethod) {
+      // If user wants to search all ontologies, ignore recommendations
+      if (this.searchAllOntologies()) {
+        const response = await this.olsService.search({
+          query,
+          rows: 15,
+        });
+        results = response.suggestions;
+      }
+      // Use specialized search method if available and using recommended ontologies
+      else if (ontologyConfig.searchMethod) {
         const method = ontologyConfig.searchMethod as keyof DirectOlsService;
         results = await (this.olsService[method] as (q: string, l?: number) => Promise<OntologySuggestion[]>)(query, 10);
       } else if (ontologyConfig.ontologies.length > 0) {
@@ -429,5 +501,43 @@ export class SdrfOntologyInputComponent implements OnInit, OnChanges {
 
   private emitValue(): void {
     this.valueChange.emit(this.inputValue());
+  }
+
+  /**
+   * Gets the recommended ontologies for the current column.
+   */
+  getRecommendedOntologies(): string[] {
+    const config = this.getOntologyConfig();
+    return config.ontologies;
+  }
+
+  /**
+   * Gets a user-friendly label for the ontology filter.
+   */
+  getOntologyLabel(): string {
+    if (this.searchAllOntologies()) {
+      return 'All ontologies';
+    }
+
+    const ontologies = this.getRecommendedOntologies();
+    if (ontologies.length === 0) {
+      return 'All ontologies';
+    }
+
+    // Format ontology names
+    const names = ontologies.map(ont => ont.toUpperCase()).join(', ');
+    return names;
+  }
+
+  /**
+   * Toggles between recommended ontologies and all ontologies.
+   */
+  toggleOntologyFilter(): void {
+    this.searchAllOntologies.update(val => !val);
+
+    // Re-run search if there's a query
+    if (this.inputValue().length >= 2) {
+      this.search(this.inputValue());
+    }
   }
 }

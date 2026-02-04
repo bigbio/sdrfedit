@@ -8,6 +8,8 @@ import {
   Component,
   Input,
   inject,
+  signal,
+  OnInit,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
@@ -39,7 +41,8 @@ import { WizardSampleEntry } from '../../../core/models/wizard';
           <input
             type="text"
             class="pattern-input"
-            [(ngModel)]="namePattern"
+            [ngModel]="namePattern()"
+            (ngModelChange)="namePattern.set($event)"
             placeholder="sample_{n}"
             title="Pattern: use {n} for number"
           />
@@ -419,13 +422,19 @@ import { WizardSampleEntry } from '../../../core/models/wizard';
     }
   `],
 })
-export class SampleValuesComponent {
+export class SampleValuesComponent implements OnInit {
   @Input() aiEnabled = false;
 
   readonly wizardState = inject(WizardStateService);
   readonly state = this.wizardState.state;
 
-  namePattern = 'sample_{n}';
+  /** Name pattern as a signal for consistent OnPush change detection */
+  readonly namePattern = signal('sample_{n}');
+
+  ngOnInit(): void {
+    // Ensure samples are initialized when component loads
+    this.wizardState.ensureSamplesInitialized();
+  }
 
   showDiseaseColumn(): boolean {
     // Show if we might have varying diseases per sample
@@ -433,11 +442,11 @@ export class SampleValuesComponent {
   }
 
   showAgeColumn(): boolean {
-    return this.state().template === 'human';
+    return this.wizardState.isHumanTemplate();
   }
 
   showSexColumn(): boolean {
-    return this.state().template === 'human';
+    return this.wizardState.isHumanTemplate();
   }
 
   updateSample(index: number, field: keyof WizardSampleEntry, value: any): void {
@@ -445,7 +454,7 @@ export class SampleValuesComponent {
   }
 
   autoGenerateNames(): void {
-    this.wizardState.autoGenerateSourceNames(this.namePattern);
+    this.wizardState.autoGenerateSourceNames(this.namePattern());
   }
 
   copyFirstToAll(field: keyof WizardSampleEntry): void {

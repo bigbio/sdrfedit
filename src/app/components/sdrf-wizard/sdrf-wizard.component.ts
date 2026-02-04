@@ -10,6 +10,7 @@ import {
   Output,
   EventEmitter,
   inject,
+  OnInit,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
@@ -17,6 +18,7 @@ import { CommonModule } from '@angular/common';
 import { WizardStateService } from '../../core/services/wizard-state.service';
 import { SdrfTable } from '../../core/models/sdrf-table';
 import { WizardGeneratorService } from '../../core/services/wizard-generator.service';
+import { TemplateService } from '../../core/services/template.service';
 
 // Step components
 import { ExperimentSetupComponent } from './steps/experiment-setup.component';
@@ -80,7 +82,10 @@ import { ReviewCreateComponent } from './steps/review-create.component';
         <div class="wizard-content">
           @switch (wizardState.currentStep()) {
             @case (0) {
-              <wizard-experiment-setup [aiEnabled]="aiEnabled" />
+              <wizard-experiment-setup
+                [aiEnabled]="aiEnabled"
+                [availableTemplates]="availableTemplates"
+              />
             }
             @case (1) {
               <wizard-sample-characteristics [aiEnabled]="aiEnabled" />
@@ -373,17 +378,24 @@ import { ReviewCreateComponent } from './steps/review-create.component';
     }
   `],
 })
-export class SdrfWizardComponent {
+export class SdrfWizardComponent implements OnInit {
   @Input() aiEnabled = false;
+  @Input() availableTemplates: string[] = ['human', 'cell-lines', 'vertebrates', 'ms-proteomics'];
   @Output() complete = new EventEmitter<SdrfTable>();
   @Output() cancel = new EventEmitter<void>();
 
   readonly wizardState = inject(WizardStateService);
   private readonly generator = inject(WizardGeneratorService);
+  readonly templateService = inject(TemplateService);
 
   constructor() {
     // Reset wizard state when component is created
     this.wizardState.reset();
+  }
+
+  ngOnInit(): void {
+    // Fetch templates when wizard opens
+    this.templateService.fetchTemplates();
   }
 
   goToStep(step: number): void {

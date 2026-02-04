@@ -213,15 +213,7 @@ export class PyodideValidatorService {
         console.warn('Failed to load templates from API:', apiError);
       }
 
-      // Set default templates as last resort
-      this.availableTemplates.set([
-        'default',
-        'human',
-        'vertebrates',
-        'nonvertebrates',
-        'plants',
-        'cell_lines'
-      ]);
+      // Do not set fake templates - leave empty until library or API provides them
     }
   }
 
@@ -314,7 +306,7 @@ export class PyodideValidatorService {
    * Get recommended templates based on SDRF content
    */
   detectTemplates(sdrfTsv: string): string[] {
-    const templates: string[] = ['default'];
+    const templates: string[] = ['ms-proteomics'];
     const content = sdrfTsv.toLowerCase();
 
     // Check for organism

@@ -124,8 +124,23 @@ export class OllamaProvider extends BaseLlmProvider {
       const data: OllamaChatResponse = await response.json();
       return this.convertResponse(data);
     } catch (error) {
-      // Check if Ollama is running
+      // Check if this is a connection/CORS error
       if (error instanceof TypeError && error.message.includes('fetch')) {
+        const isRemoteHost = typeof window !== 'undefined' &&
+          !window.location.hostname.includes('localhost') &&
+          !window.location.hostname.includes('127.0.0.1');
+
+        if (isRemoteHost) {
+          throw new LlmError(
+            `Cannot connect to Ollama at ${this.config.baseUrl}. ` +
+            `This is likely a CORS issue - Ollama running on localhost cannot be accessed from this remote site. ` +
+            `Either: (1) Run the editor locally, (2) Configure Ollama with OLLAMA_ORIGINS=${window.location.origin}, ` +
+            `or (3) Use a cloud AI provider like OpenAI or Anthropic.`,
+            'NETWORK_ERROR',
+            'ollama'
+          );
+        }
+
         throw new LlmError(
           'Cannot connect to Ollama. Make sure Ollama is running on ' + this.config.baseUrl,
           'NETWORK_ERROR',
@@ -222,6 +237,21 @@ export class OllamaProvider extends BaseLlmProvider {
       }
     } catch (error) {
       if (error instanceof TypeError && error.message.includes('fetch')) {
+        const isRemoteHost = typeof window !== 'undefined' &&
+          !window.location.hostname.includes('localhost') &&
+          !window.location.hostname.includes('127.0.0.1');
+
+        if (isRemoteHost) {
+          throw new LlmError(
+            `Cannot connect to Ollama at ${this.config.baseUrl}. ` +
+            `This is likely a CORS issue - Ollama running on localhost cannot be accessed from this remote site. ` +
+            `Either: (1) Run the editor locally, (2) Configure Ollama with OLLAMA_ORIGINS=${window.location.origin}, ` +
+            `or (3) Use a cloud AI provider like OpenAI or Anthropic.`,
+            'NETWORK_ERROR',
+            'ollama'
+          );
+        }
+
         throw new LlmError(
           'Cannot connect to Ollama. Make sure Ollama is running.',
           'NETWORK_ERROR',

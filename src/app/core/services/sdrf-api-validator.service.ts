@@ -35,10 +35,18 @@ export interface ApiValidationResult {
 }
 
 /**
+ * Template info from API
+ */
+export interface ApiTemplateInfo {
+  name: string;
+  description: string;
+}
+
+/**
  * API templates response
  */
 export interface ApiTemplatesResponse {
-  templates: string[];
+  templates: ApiTemplateInfo[];
   legacy_mappings: Record<string, string>;
 }
 
@@ -104,7 +112,8 @@ export class SdrfApiValidatorService {
       }
 
       const result: ApiTemplatesResponse = await response.json();
-      return result.templates;
+      // Extract just the template names from the objects
+      return result.templates.map(t => t.name);
     } catch (error) {
       console.warn('Failed to get templates from API:', error);
       // Return default templates
@@ -122,7 +131,7 @@ export class SdrfApiValidatorService {
    */
   async validate(
     sdrfTsv: string,
-    templates: string[] = ['default'],
+    templates: string[] = ['ms-proteomics'],
     options: { skipOntology?: boolean; useOlsCacheOnly?: boolean } = {}
   ): Promise<ValidationError[]> {
     const { skipOntology = true, useOlsCacheOnly = true } = options;
@@ -171,7 +180,7 @@ export class SdrfApiValidatorService {
    */
   async validateFile(
     file: File,
-    templates: string[] = ['default'],
+    templates: string[] = ['ms-proteomics'],
     options: { skipOntology?: boolean; useOlsCacheOnly?: boolean } = {}
   ): Promise<ValidationError[]> {
     const { skipOntology = true, useOlsCacheOnly = true } = options;

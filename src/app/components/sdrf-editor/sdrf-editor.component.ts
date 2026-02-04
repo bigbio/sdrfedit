@@ -40,6 +40,9 @@ import { SdrfFilterBarComponent, FilterResult } from '../sdrf-filter-bar/sdrf-fi
 import { SdrfRecommendPanelComponent, ApplyRecommendationEvent, BatchApplyEvent, ApplyFixEvent } from '../sdrf-recommend-panel/sdrf-recommend-panel.component';
 import { LlmSettingsDialogComponent } from '../llm-settings/llm-settings-dialog.component';
 import { SdrfWizardComponent } from '../sdrf-wizard/sdrf-wizard.component';
+import { ColumnEditorPanelComponent, BulkEditEvent as ColumnBulkEditEvent } from '../column-editor-panel/column-editor-panel.component';
+import { CacheRecoveryPanelComponent, RecoverCacheEvent } from '../cache-recovery-panel/cache-recovery-panel.component';
+import { TableCacheService, tableCacheService } from '../../core/services/table-cache.service';
 import { SdrfRecommendation } from '../../core/models/llm';
 import {
   PyodideValidatorService,
@@ -76,87 +79,38 @@ const BUFFER_ROWS = 10;
 @Component({
   selector: 'sdrf-editor-table',
   standalone: true,
-  imports: [CommonModule, FormsModule, SdrfCellEditorComponent, SdrfColumnStatsComponent, SdrfBulkToolbarComponent, SdrfFilterBarComponent, SdrfRecommendPanelComponent, LlmSettingsDialogComponent, SdrfWizardComponent],
+  imports: [CommonModule, FormsModule, SdrfCellEditorComponent, SdrfColumnStatsComponent, SdrfBulkToolbarComponent, SdrfFilterBarComponent, SdrfRecommendPanelComponent, LlmSettingsDialogComponent, SdrfWizardComponent, ColumnEditorPanelComponent, CacheRecoveryPanelComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="sdrf-editor" [class.loading]="loading()">
-      <!-- Toolbar -->
-      <div class="sdrf-toolbar">
-        <div class="toolbar-left">
-          <input
-            type="file"
-            #fileInput
-            accept=".tsv,.txt,.sdrf"
-            style="display: none"
-            (change)="onFileSelected($event)"
-          />
-          <button class="btn btn-primary" (click)="fileInput.click()">
-            Import File
-          </button>
-          <button class="btn btn-create" (click)="openWizard()">
-            Create New
-          </button>
-
-          @if (table()) {
-            <button class="btn btn-secondary" (click)="exportTsv()">
-              Export TSV
-            </button>
-            <button class="btn btn-secondary" (click)="validate()">
-              Validate
-            </button>
-            <span class="toolbar-divider"></span>
-            <button class="btn btn-secondary" (click)="addRowAtEnd()" title="Add a new row at the end">
-              + Row
-            </button>
-            <button class="btn btn-secondary" (click)="showAddColumnDialog()" title="Add a new column">
-              + Column
-            </button>
-            <span class="toolbar-divider"></span>
-            <button
-              class="btn"
-              [class.btn-active]="showFilterBar()"
-              (click)="toggleFilterBar()"
-              title="Filter rows"
-            >
-              Filter
-            </button>
-            <button
-              class="btn"
-              [class.btn-active]="showStatsPanel()"
-              (click)="toggleStatsPanel()"
-              title="Show column statistics"
-            >
-              Stats
-            </button>
-            <button
-              class="btn btn-ai"
-              [class.btn-active]="showRecommendPanel()"
-              (click)="toggleRecommendPanel()"
-              title="AI-powered recommendations"
-            >
-              AI Assistant
-            </button>
-          }
-        </div>
-
-        <div class="toolbar-right">
-          @if (table()) {
-            <div class="column-legend">
-              <span class="legend-item source">Sample Accession</span>
-              <span class="legend-item characteristic">Sample Properties</span>
-              <span class="legend-item comment">Data Properties</span>
-              <span class="legend-item factor">Factor Values</span>
+      <!-- Collapsible Top Banner -->
+      @if (table()) {
+        <div class="top-banner" [class.collapsed]="bannerCollapsed()">
+          @if (!bannerCollapsed()) {
+            <div class="banner-content">
+              <div class="banner-left">
+                <h1 class="banner-title">SDRF Editor</h1>
+              </div>
+              <div class="banner-nav">
+                <a href="https://sdrf.quantms.org/" target="_blank" class="nav-link">SDRF Project</a>
+                <a href="https://sdrf.quantms.org/specification.html" target="_blank" class="nav-link">Specification</a>
+              </div>
             </div>
-            <span class="table-info">
-              {{ table()!.columns.length }} columns,
-              {{ table()!.sampleCount }} samples
-              @if (visibleRange()) {
-                (showing {{ visibleRange()!.start }}-{{ visibleRange()!.end }})
-              }
-            </span>
           }
+          <button class="banner-toggle" (click)="toggleBanner()" [title]="bannerCollapsed() ? 'Show banner' : 'Hide banner'">
+            {{ bannerCollapsed() ? '▼' : '▲' }}
+          </button>
         </div>
-      </div>
+      }
+
+      <!-- Hidden file input used by landing page -->
+      <input
+        type="file"
+        #fileInput
+        accept=".tsv,.txt,.sdrf"
+        style="display: none"
+        (change)="onFileSelected($event)"
+      />
 
       <!-- Loading indicator -->
       @if (loading()) {
@@ -240,13 +194,22 @@ const BUFFER_ROWS = 10;
                           [title]="getColumnTooltip(column.name)"
                           (click)="onHeaderClick(colIdx, $event)"
                         >
-                          <span class="col-name">{{ column.name }}</span>
-                          @if (column.isRequired) {
-                            <span class="required-marker">*</span>
-                          }
-                          @if (sortColumn() === colIdx) {
-                            <span class="sort-indicator">{{ sortDirection() === 'asc' ? '▲' : '▼' }}</span>
-                          }
+                          <div class="col-header-content">
+                            <span class="col-name">{{ column.name }}</span>
+                            @if (column.isRequired) {
+                              <span class="required-marker">*</span>
+                            }
+                            @if (sortColumn() === colIdx) {
+                              <span class="sort-indicator">{{ sortDirection() === 'asc' ? '▲' : '▼' }}</span>
+                            }
+                            <button
+                              class="bulk-edit-btn"
+                              (click)="openColumnEditor(colIdx); $event.stopPropagation()"
+                              title="Bulk edit this column"
+                            >
+                              📝
+                            </button>
+                          </div>
                         </th>
                       }
                     </tr>
@@ -351,21 +314,31 @@ const BUFFER_ROWS = 10;
               </div>
 
               <div class="validation-panel-body">
-                <!-- Template Selector -->
+                <!-- Template Selector: only show templates from library/API when loaded -->
                 <div class="template-selector-row">
                   <span class="template-label">Templates:</span>
-                  <div class="template-chips">
-                    @for (template of pyodideAvailableTemplates().length > 0 ? pyodideAvailableTemplates() : ['default', 'human', 'vertebrates', 'nonvertebrates', 'plants', 'cell_lines']; track template) {
-                      <label class="template-chip" [class.selected]="selectedTemplates().includes(template)">
-                        <input
-                          type="checkbox"
-                          [checked]="selectedTemplates().includes(template)"
-                          (change)="toggleTemplate(template)"
-                        />
-                        {{ template }}
-                      </label>
-                    }
-                  </div>
+                  @if (pyodideAvailableTemplates().length > 0) {
+                    <div class="template-chips">
+                      @for (template of pyodideAvailableTemplates(); track template) {
+                        <label class="template-chip" [class.selected]="selectedTemplates().includes(template)">
+                          <input
+                            type="checkbox"
+                            [checked]="selectedTemplates().includes(template)"
+                            (change)="toggleTemplate(template)"
+                          />
+                          {{ template }}
+                        </label>
+                      }
+                    </div>
+                  } @else if (pyodideState() === 'loading') {
+                    <span class="template-loading">Loading templates...</span>
+                  } @else if (pyodideState() === 'not-loaded') {
+                    <span class="template-loading">Load validator to see templates</span>
+                  } @else if (pyodideState() === 'error') {
+                    <span class="template-loading">Templates unavailable</span>
+                  } @else {
+                    <span class="template-loading">No templates available</span>
+                  }
                   <button
                     class="btn btn-primary btn-sm"
                     [disabled]="pyodideValidating() || selectedTemplates().length === 0"
@@ -533,7 +506,6 @@ const BUFFER_ROWS = 10;
           <div class="ai-panel-wrapper">
             <sdrf-recommend-panel
               [table]="table()"
-              [incomingChatMessage]="pendingChatMessage()"
               (close)="toggleRecommendPanel()"
               (openSettings)="openLlmSettings()"
               (applyRecommendation)="onApplyRecommendation($event)"
@@ -543,10 +515,108 @@ const BUFFER_ROWS = 10;
             ></sdrf-recommend-panel>
           </div>
         </div>
+
+        <!-- Column Editor Panel - Slide-in from right -->
+        <column-editor-panel
+          [isOpen]="showColumnEditor"
+          [table]="table"
+          [columnIndex]="columnEditorIndex"
+          (close)="closeColumnEditor()"
+          (applyBulkEdit)="onBulkEditColumn($event)"
+        ></column-editor-panel>
       } @else if (!loading() && !error()) {
-        <div class="empty-state">
-          <p>No SDRF file loaded</p>
-          <p class="hint">Import a file or provide a URL to get started</p>
+        <!-- Enhanced Landing Page -->
+        <div class="landing-page">
+          <div class="landing-header">
+            <h1>SDRF Editor</h1>
+            <p class="tagline">Sample and Data Relationship Format editor for proteomics metadata</p>
+          </div>
+
+          <div class="landing-actions">
+            <button class="btn btn-create btn-large" (click)="openWizard()">
+              ✨ Create New SDRF
+            </button>
+            <button class="btn btn-primary btn-large" (click)="fileInput.click()">
+              📂 Import SDRF File
+            </button>
+            <input
+              type="text"
+              [(ngModel)]="loadUrlValue"
+              placeholder="Enter SDRF URL..."
+              class="url-input"
+              (keydown.enter)="onLoadUrlClick()"
+            />
+            <button class="btn btn-secondary" (click)="onLoadUrlClick()">Load URL</button>
+            <button class="btn btn-secondary" (click)="onLoadExampleClick()">Load Example</button>
+          </div>
+
+          <div class="landing-content">
+            <div class="info-section">
+              <h2>What is SDRF?</h2>
+              <p>
+                The Sample and Data Relationship Format (SDRF) is a standardized format for annotating
+                proteomics experiments. It captures the relationships between samples, experimental design,
+                and data files in a structured, machine-readable way.
+              </p>
+              <p>
+                SDRF is part of the HUPO Proteomics Standards Initiative (PSI) and is widely used for
+                submitting proteomics data to public repositories like PRIDE and ProteomeXchange.
+              </p>
+            </div>
+
+            <div class="info-section">
+              <h2>Getting Started</h2>
+              <ul class="feature-list">
+                <li><strong>Import:</strong> Load an existing SDRF file (.tsv) from your computer</li>
+                <li><strong>Create:</strong> Build a new SDRF from scratch using our guided wizard</li>
+                <li><strong>Edit:</strong> Modify metadata with intelligent autocomplete and validation</li>
+                <li><strong>Validate:</strong> Check your SDRF against the official specification</li>
+                <li><strong>AI Assist:</strong> Get smart suggestions for filling and fixing metadata</li>
+              </ul>
+            </div>
+
+            <div class="info-section">
+              <h2>Resources</h2>
+              <div class="resource-links">
+                <a href="https://sdrf.quantms.org/" target="_blank" class="resource-link">
+                  <span class="link-icon">🏠</span>
+                  <div>
+                    <div class="link-title">SDRF Project</div>
+                    <div class="link-desc">Official SDRF documentation and examples</div>
+                  </div>
+                </a>
+                <a href="https://sdrf.quantms.org/specification.html" target="_blank" class="resource-link">
+                  <span class="link-icon">📋</span>
+                  <div>
+                    <div class="link-title">Specification</div>
+                    <div class="link-desc">Detailed format specification and rules</div>
+                  </div>
+                </a>
+                <a href="https://github.com/bigbio/proteomics-metadata-standard" target="_blank" class="resource-link">
+                  <span class="link-icon">💻</span>
+                  <div>
+                    <div class="link-title">GitHub Repository</div>
+                    <div class="link-desc">Source code, examples, and issue tracker</div>
+                  </div>
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <div class="landing-footer">
+            <p class="footer-text">Supported by the proteomics community</p>
+            <div class="partner-logos">
+              <a href="https://eubic-ms.org/" target="_blank" class="partner-logo" title="EuBIC-MS">
+                <img src="assets/images/eubic-logo.png" alt="EuBIC-MS Logo" class="logo-image">
+              </a>
+              <a href="https://psidev.info/" target="_blank" class="partner-logo" title="HUPO-PSI">
+                <img src="assets/images/psi-logo.png" alt="HUPO-PSI Logo" class="logo-image">
+              </a>
+              <a href="https://quantms.org/" target="_blank" class="partner-logo" title="QuantMS">
+                <img src="assets/images/quantms-logo.png" alt="QuantMS Logo" class="logo-image">
+              </a>
+            </div>
+          </div>
         </div>
       }
 
@@ -586,9 +656,18 @@ const BUFFER_ROWS = 10;
       @if (showWizard()) {
         <sdrf-wizard
           [aiEnabled]="isAiConfigured()"
+          [availableTemplates]="availableWizardTemplates"
           (complete)="onWizardComplete($event)"
           (cancel)="closeWizard()"
         />
+      }
+
+      <!-- Cache Recovery Panel -->
+      @if (showCacheRecovery()) {
+        <cache-recovery-panel
+          (recover)="onRecoverCache($event)"
+          (dismiss)="dismissCacheRecovery()"
+        ></cache-recovery-panel>
       }
     </div>
   `,
@@ -613,6 +692,274 @@ const BUFFER_ROWS = 10;
     sdrf-filter-bar {
       display: block;
       flex-shrink: 0;
+    }
+
+    /* Top Banner Styles */
+    .top-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 16px 24px;
+      border-bottom: 3px solid #5a67d8;
+      flex-shrink: 0;
+      transition: all 0.3s ease;
+    }
+
+    .top-banner.collapsed {
+      padding: 8px 24px;
+    }
+
+    .banner-content {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex: 1;
+      gap: 24px;
+    }
+
+    .banner-left {
+      flex: 1;
+    }
+
+    .banner-title {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    .banner-subtitle {
+      margin: 4px 0 0 0;
+      font-size: 13px;
+      opacity: 0.9;
+    }
+
+    .banner-nav {
+      display: flex;
+      gap: 16px;
+    }
+
+    .nav-link {
+      color: white;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.15);
+      transition: all 0.2s;
+    }
+
+    .nav-link:hover {
+      background: rgba(255, 255, 255, 0.25);
+      transform: translateY(-1px);
+    }
+
+    .banner-toggle {
+      background: rgba(255, 255, 255, 0.2);
+      border: none;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+      margin-left: 12px;
+    }
+
+    .banner-toggle:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    /* Landing Page Styles */
+    .landing-page {
+      flex: 1;
+      overflow-y: auto;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .landing-header {
+      text-align: center;
+      padding: 60px 40px 40px;
+    }
+
+    .landing-header h1 {
+      font-size: 48px;
+      margin: 0 0 16px 0;
+      font-weight: 700;
+      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+
+    .tagline {
+      font-size: 18px;
+      margin: 0;
+      opacity: 0.95;
+    }
+
+    .landing-actions {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 0 40px 40px;
+    }
+
+    .landing-actions .url-input {
+      padding: 10px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      border-radius: 6px;
+      font-size: 14px;
+      min-width: 280px;
+      background: rgba(255, 255, 255, 0.15);
+      color: white;
+    }
+
+    .landing-actions .url-input::placeholder {
+      color: rgba(255, 255, 255, 0.7);
+    }
+
+    .btn-large {
+      padding: 14px 32px;
+      font-size: 16px;
+      font-weight: 600;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      transition: all 0.2s;
+    }
+
+    .btn-large:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    }
+
+    .landing-content {
+      flex: 1;
+      background: white;
+      color: #1f2937;
+      border-radius: 24px 24px 0 0;
+      padding: 48px 40px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 40px;
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .info-section h2 {
+      font-size: 22px;
+      margin: 0 0 16px 0;
+      color: #667eea;
+      font-weight: 600;
+    }
+
+    .info-section p {
+      margin: 0 0 12px 0;
+      line-height: 1.6;
+      color: #4b5563;
+    }
+
+    .feature-list {
+      margin: 0;
+      padding-left: 20px;
+      line-height: 1.8;
+    }
+
+    .feature-list li {
+      margin-bottom: 8px;
+      color: #4b5563;
+    }
+
+    .feature-list strong {
+      color: #1f2937;
+    }
+
+    .resource-links {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .resource-link {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px;
+      background: #f9fafb;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .resource-link:hover {
+      border-color: #667eea;
+      background: #f3f4f6;
+      transform: translateX(4px);
+    }
+
+    .link-icon {
+      font-size: 28px;
+      flex-shrink: 0;
+    }
+
+    .link-title {
+      font-weight: 600;
+      color: #1f2937;
+      margin-bottom: 2px;
+    }
+
+    .link-desc {
+      font-size: 12px;
+      color: #6b7280;
+    }
+
+    .landing-footer {
+      background: white;
+      padding: 32px 40px;
+      text-align: center;
+      border-top: 2px solid #e5e7eb;
+    }
+
+    .footer-text {
+      margin: 0 0 16px 0;
+      color: #6b7280;
+      font-size: 14px;
+    }
+
+    .partner-logos {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 48px;
+      flex-wrap: wrap;
+    }
+
+    .partner-logo {
+      text-decoration: none;
+      transition: all 0.3s;
+      display: block;
+    }
+
+    .partner-logo:hover {
+      transform: translateY(-4px);
+    }
+
+    .logo-image {
+      height: 60px;
+      width: auto;
+      object-fit: contain;
+      filter: grayscale(20%);
+      transition: filter 0.3s;
+    }
+
+    .logo-image:hover {
+      filter: grayscale(0%);
     }
 
     .sdrf-toolbar {
@@ -1225,6 +1572,12 @@ const BUFFER_ROWS = 10;
       height: 12px;
     }
 
+    .template-loading {
+      font-size: 13px;
+      color: #666;
+      font-style: italic;
+    }
+
     .btn-sm {
       padding: 6px 12px;
       font-size: 12px;
@@ -1429,6 +1782,36 @@ const BUFFER_ROWS = 10;
       display: inline;
     }
 
+    .col-header-content {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      justify-content: space-between;
+      width: 100%;
+    }
+
+    .bulk-edit-btn {
+      background: rgba(255, 255, 255, 0.9);
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      padding: 2px 6px;
+      font-size: 12px;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.2s, background 0.2s;
+      flex-shrink: 0;
+    }
+
+    .sdrf-table th:hover .bulk-edit-btn {
+      opacity: 1;
+    }
+
+    .bulk-edit-btn:hover {
+      background: #2196f3;
+      border-color: #2196f3;
+      transform: scale(1.1);
+    }
+
     /* Sample Accession (source name) - Green */
     .sdrf-table th.col-type-source { border-left-color: #4caf50; background: rgba(76, 175, 80, 0.05); }
 
@@ -1459,6 +1842,20 @@ const BUFFER_ROWS = 10;
       height: 24px;
       background: #ddd;
       margin: 0 4px;
+    }
+
+    .unsaved-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #856404;
+      font-weight: 500;
+      margin-left: 8px;
     }
 
     .btn-active {
@@ -1685,11 +2082,17 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   /** URL to load SDRF from */
   @Input() url?: string;
 
+  /** Example SDRF URL for "Load Example" on the landing page */
+  @Input() exampleUrl?: string;
+
   /** SDRF content to load directly */
   @Input() content?: string;
 
   /** Whether the editor is read-only */
   @Input() readonly = false;
+
+  /** Available templates for the creation wizard (defaults to common templates) */
+  @Input() availableWizardTemplates: string[] = ['human', 'cell-lines', 'vertebrates', 'ms-proteomics'];
 
   // ============ Outputs ============
 
@@ -1698,6 +2101,12 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   /** Emitted when validation completes */
   @Output() validationComplete = new EventEmitter<ValidationResult>();
+
+  /** Emitted when user requests to load from URL (landing page) */
+  @Output() loadUrlRequested = new EventEmitter<string>();
+
+  /** Emitted when user requests to load the example SDRF (landing page) */
+  @Output() loadExampleRequested = new EventEmitter<void>();
 
   // ============ View References ============
 
@@ -1755,6 +2164,9 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   /** Whether AI recommend panel is visible */
   showRecommendPanel = signal(false);
 
+  /** Whether top banner is collapsed */
+  bannerCollapsed = signal(false);
+
   /** Whether LLM settings dialog is visible */
   showLlmSettingsDialog = signal(false);
 
@@ -1764,9 +2176,28 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   /** Whether validation panel is visible */
   showValidationPanel = signal(false);
 
+  /** Whether column editor panel is visible */
+  showColumnEditor = signal(false);
+
+  /** Column index being edited in bulk */
+  columnEditorIndex = signal(-1);
+
+  /** Whether cache recovery panel is visible */
+  showCacheRecovery = signal(false);
+
+  /** Current cache ID (if loaded from cache) */
+  currentCacheId = signal<string | null>(null);
+
+  /** Number of changes made (for cache tracking) */
+  changeCount = signal(0);
+
+  /** Current file name */
+  fileName = signal('untitled.sdrf.tsv');
+
   // ============ Pyodide Validation State ============
 
   private pyodideService: PyodideValidatorService;
+  private cacheService: TableCacheService = tableCacheService;
 
   /** Pyodide validation in progress */
   pyodideValidating = signal(false);
@@ -1778,7 +2209,7 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   pyodideHasValidated = signal(false);
 
   /** Selected templates for validation */
-  selectedTemplates = signal<string[]>(['default']);
+  selectedTemplates = signal<string[]>(['ms-proteomics']);
 
   /** Aggregated validation errors (grouped by message) */
   aggregatedErrors = computed(() => this.aggregateErrors(this.pyodideErrors()));
@@ -1799,11 +2230,11 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   /** Context menu state */
   contextMenu = signal<{ x: number; y: number; row: number; col: number } | null>(null);
 
-  /** Pending chat message to send to AI panel */
-  pendingChatMessage = signal<string | null>(null);
-
   /** Last selected row for shift-click range selection */
   private lastSelectedRow: number | null = null;
+
+  /** URL input value on the landing page (Load URL) */
+  loadUrlValue = '';
 
   // ============ Filter State ============
 
@@ -1918,6 +2349,12 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   // ============ Lifecycle ============
 
   ngOnInit(): void {
+    // Check for cached tables first
+    if (this.cacheService.hasCachedTables() && !this.url && !this.content) {
+      this.showCacheRecovery.set(true);
+      return;
+    }
+
     // Auto-load from URL or content if provided
     if (this.url) {
       this.loadFromUrl(this.url);
@@ -2026,11 +2463,20 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
     try {
       await this.pyodideService.initialize();
 
-      // Auto-detect templates based on content
+      const available = this.pyodideAvailableTemplates();
+      if (available.length === 0) return;
+
+      // Prefer auto-detected templates from table content; otherwise keep only valid names
       if (this.table()) {
         const tsvContent = sdrfExport.exportToTsv(this.table()!);
         const detected = this.pyodideService.detectTemplates(tsvContent);
-        this.selectedTemplates.set(detected);
+        const valid = detected.filter(t => available.includes(t));
+        const fallback = available.includes('ms-proteomics') ? 'ms-proteomics' : available[0];
+        this.selectedTemplates.set(valid.length > 0 ? valid : [fallback]);
+      } else {
+        const current = this.selectedTemplates().filter(t => available.includes(t));
+        const fallback = available.includes('ms-proteomics') ? 'ms-proteomics' : available[0];
+        this.selectedTemplates.set(current.length > 0 ? current : [fallback]);
       }
     } catch (err) {
       console.error('Failed to initialize Pyodide:', err);
@@ -2065,10 +2511,19 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
         console.log(`[Validate] First 3 TSV lines:`, lines);
       }
 
+      // Use only template names that exist in the loaded library/API list
+      const available = this.pyodideAvailableTemplates();
+      let templatesToUse = this.selectedTemplates().filter(t => available.includes(t));
+      if (templatesToUse.length === 0 && available.length > 0) {
+        const defaultTemplate = available.includes('ms-proteomics') ? 'ms-proteomics' : available[0];
+        templatesToUse = [defaultTemplate];
+        this.selectedTemplates.set(templatesToUse);
+      }
+
       // Run validation
       const errors = await this.pyodideService.validate(
         tsvContent,
-        this.selectedTemplates(),
+        templatesToUse,
         { skipOntology: true }
       );
 
@@ -2169,36 +2624,13 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   /**
    * Send validation error to AI chat
    */
+  /**
+   * Opens the AI panel when user clicks on a validation error.
+   * The AI recommendations will include all validation errors automatically.
+   */
   sendErrorToAI(error: AggregatedValidationError): void {
-    // Open the AI panel
+    // Open the AI panel - validation errors are automatically included in AI analysis
     this.showRecommendPanel.set(true);
-
-    // Format the error message for the AI
-    const cellInfo = error.cells.length > 0
-      ? `\nAffected rows: ${error.cells.slice(0, 10).map(c => c.row + 1).join(', ')}${error.cells.length > 10 ? ` and ${error.cells.length - 10} more` : ''}`
-      : '';
-
-    const valueInfo = error.cells.length > 0 && error.cells[0].value
-      ? `\nExample value: "${error.cells[0].value}"`
-      : '';
-
-    const suggestionInfo = error.suggestion
-      ? `\nSuggestion: ${error.suggestion}`
-      : '';
-
-    // Create a formatted message to send to the chat
-    const message = `I have a validation error that I need help with:
-
-**Error:** ${error.message}
-**Column:** ${error.column || 'N/A'}${cellInfo}${valueInfo}${suggestionInfo}
-
-How can I fix this?`;
-
-    // Set the pending chat message - this will be picked up by the recommend panel
-    this.pendingChatMessage.set(message);
-
-    // Clear the message after a delay to allow re-sending the same message
-    setTimeout(() => this.pendingChatMessage.set(null), 500);
   }
 
   /**
@@ -2239,6 +2671,17 @@ How can I fix this?`;
       this.loading.set(false);
       input.value = ''; // Reset input
     });
+  }
+
+  onLoadUrlClick(): void {
+    const url = this.loadUrlValue?.trim();
+    if (url) {
+      this.loadUrlRequested.emit(url);
+    }
+  }
+
+  onLoadExampleClick(): void {
+    this.loadExampleRequested.emit();
   }
 
   onScroll(event: Event): void {
@@ -2376,6 +2819,9 @@ How can I fix this?`;
     newTable.columns[col] = column;
     this.table.set(newTable);
     this.tableChange.emit(newTable);
+
+    // Auto-save after cell edit
+    this.autoSaveTable();
   }
 
   isSelected(row: number, col: number): boolean {
@@ -2437,6 +2883,10 @@ How can I fix this?`;
       this.scrollTop.set(0);
       this.clearSelection();
 
+      // Reset cache state for new file
+      this.currentCacheId.set(null);
+      this.changeCount.set(0);
+
       if (result.warnings.length > 0) {
         console.warn('Parse warnings:', result.warnings);
       }
@@ -2457,6 +2907,10 @@ How can I fix this?`;
     this.showRecommendPanel.set(!this.showRecommendPanel());
   }
 
+  toggleBanner(): void {
+    this.bannerCollapsed.set(!this.bannerCollapsed());
+  }
+
   openLlmSettings(): void {
     this.showLlmSettingsDialog.set(true);
   }
@@ -2469,6 +2923,98 @@ How can I fix this?`;
     // Settings were saved, panel can now use the new configuration
     console.log('LLM settings saved');
   }
+
+  // ============ Column Editor Methods ============
+
+  openColumnEditor(columnIndex: number): void {
+    this.columnEditorIndex.set(columnIndex);
+    this.showColumnEditor.set(true);
+  }
+
+  closeColumnEditor(): void {
+    this.showColumnEditor.set(false);
+    this.columnEditorIndex.set(-1);
+  }
+
+  onBulkEditColumn(event: ColumnBulkEditEvent): void {
+    const t = this.table();
+    if (!t || event.columnIndex < 0 || event.columnIndex >= t.columns.length) {
+      console.error('Invalid column index for bulk edit:', event.columnIndex);
+      return;
+    }
+
+    const column = t.columns[event.columnIndex];
+
+    // Apply the value to all selected samples
+    for (const sampleIndex of event.sampleIndices) {
+      if (sampleIndex >= 1 && sampleIndex <= t.sampleCount) {
+        setValueForSample(column, sampleIndex, event.value);
+      }
+    }
+
+    // Force update
+    this.table.set({ ...t });
+    this.tableChange.emit(t);
+
+    // Auto-save
+    this.autoSaveTable();
+
+    console.log(`Bulk edited column "${column.name}" for ${event.sampleIndices.length} samples`);
+
+    // Close the panel
+    this.closeColumnEditor();
+  }
+
+  // ============ Cache Recovery Methods ============
+
+  onRecoverCache(event: RecoverCacheEvent): void {
+    const cached = this.cacheService.loadTable(event.cacheId);
+    if (!cached) {
+      console.error('Failed to load cached table:', event.cacheId);
+      return;
+    }
+
+    // Load the table
+    this.table.set(cached.table);
+    this.tableChange.emit(cached.table);
+    this.currentCacheId.set(event.cacheId);
+    this.changeCount.set(cached.entry.changeCount);
+    this.fileName.set(cached.entry.fileName);
+
+    // Hide recovery panel
+    this.showCacheRecovery.set(false);
+
+    console.log(`Recovered table from cache: ${cached.entry.fileName}`);
+  }
+
+  dismissCacheRecovery(): void {
+    this.showCacheRecovery.set(false);
+  }
+
+  private autoSaveTable(): void {
+    const t = this.table();
+    const name = this.fileName();
+
+    if (!t || !name) return;
+
+    // Increment change count
+    const count = this.changeCount() + 1;
+    this.changeCount.set(count);
+
+    // Save to cache
+    const cacheId = this.cacheService.saveTable(
+      t,
+      name,
+      this.currentCacheId() || undefined,
+      count
+    );
+
+    if (cacheId && !this.currentCacheId()) {
+      this.currentCacheId.set(cacheId);
+    }
+  }
+
+  // ============ Recommendation Methods ============
 
   onApplyRecommendation(event: ApplyRecommendationEvent): void {
     const rec = event.recommendation;

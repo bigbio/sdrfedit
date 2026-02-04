@@ -7,12 +7,19 @@
 // ============ Template Types ============
 
 /**
- * Template types for SDRF experiments.
+ * Template type - now dynamic string for API-driven templates.
+ * Legacy values: 'human', 'cell-line', 'vertebrate', 'other'
+ * New values from API: 'human', 'cell-lines', 'vertebrates', 'ms-proteomics', etc.
  */
-export type WizardTemplate = 'human' | 'cell-line' | 'vertebrate' | 'other';
+export type WizardTemplate = string;
 
 /**
- * Template information for display.
+ * Legacy template type for backward compatibility.
+ */
+export type LegacyWizardTemplate = 'human' | 'cell-line' | 'vertebrate' | 'other';
+
+/**
+ * Template information for display (legacy format).
  */
 export interface TemplateInfo {
   id: WizardTemplate;
@@ -23,7 +30,18 @@ export interface TemplateInfo {
 }
 
 /**
- * Available templates with their descriptions.
+ * Map legacy template IDs to new ones.
+ */
+export function mapLegacyTemplateId(id: string): string {
+  const mapping: Record<string, string> = {
+    'cell-line': 'cell-lines',
+    'vertebrate': 'vertebrates',
+  };
+  return mapping[id] || id;
+}
+
+/**
+ * Default templates for the wizard (fallback when API unavailable).
  */
 export const WIZARD_TEMPLATES: TemplateInfo[] = [
   {
@@ -34,27 +52,48 @@ export const WIZARD_TEMPLATES: TemplateInfo[] = [
     examples: ['Patient biopsies', 'Blood samples', 'Tumor tissues'],
   },
   {
-    id: 'cell-line',
+    id: 'cell-lines',
     name: 'Cell Lines',
     description: 'Cultured cell lines (HeLa, HEK293, etc.)',
     icon: 'science',
     examples: ['HeLa cells', 'HEK293', 'MCF-7', 'A549'],
   },
   {
-    id: 'vertebrate',
-    name: 'Vertebrate (Non-Human)',
+    id: 'vertebrates',
+    name: 'Vertebrates (Non-Human)',
     description: 'Mouse, rat, zebrafish, and other vertebrate samples',
     icon: 'pets',
     examples: ['Mouse liver', 'Rat brain', 'Zebrafish embryo'],
   },
   {
-    id: 'other',
-    name: 'Other',
-    description: 'Plants, bacteria, yeast, or synthetic samples',
-    icon: 'category',
-    examples: ['E. coli', 'Yeast', 'Arabidopsis', 'Synthetic peptides'],
+    id: 'ms-proteomics',
+    name: 'MS Proteomics',
+    description: 'Mass spectrometry-based proteomics experiments',
+    icon: 'analytics',
+    examples: ['DDA', 'DIA', 'PRM', 'SRM'],
   },
 ];
+
+/**
+ * Check if template is a human-like template (requires age/sex fields).
+ */
+export function isHumanTemplate(templateId: string | null): boolean {
+  return templateId === 'human';
+}
+
+/**
+ * Check if template is a cell line template.
+ */
+export function isCellLineTemplate(templateId: string | null): boolean {
+  return templateId === 'cell-line' || templateId === 'cell-lines';
+}
+
+/**
+ * Check if template is a vertebrate template.
+ */
+export function isVertebrateTemplate(templateId: string | null): boolean {
+  return templateId === 'vertebrate' || templateId === 'vertebrates';
+}
 
 // ============ Ontology Term ============
 
@@ -135,6 +174,27 @@ export const LABEL_CONFIGS: LabelPlexConfig[] = [
 // ============ Modification ============
 
 /**
+ * Position where a modification can occur.
+ */
+export type ModificationPosition = 'Anywhere' | 'Any N-term' | 'Protein N-term' | 'Any C-term' | 'Protein C-term';
+
+/**
+ * Available positions for modification selection.
+ */
+export const MODIFICATION_POSITIONS: { value: ModificationPosition; label: string }[] = [
+  { value: 'Anywhere', label: 'Anywhere' },
+  { value: 'Any N-term', label: 'Any N-term' },
+  { value: 'Protein N-term', label: 'Protein N-term' },
+  { value: 'Any C-term', label: 'Any C-term' },
+  { value: 'Protein C-term', label: 'Protein C-term' },
+];
+
+/**
+ * Common amino acids for modification target.
+ */
+export const AMINO_ACIDS = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y'];
+
+/**
  * A protein modification configuration.
  */
 export interface WizardModification {
@@ -144,20 +204,28 @@ export interface WizardModification {
   targetAminoAcids: string;
   /** Modification type */
   type: 'fixed' | 'variable';
+  /** Position (terminal/anywhere) */
+  position: ModificationPosition;
   /** UNIMOD accession */
   unimodAccession?: string;
+  /** Mass shift (delta mass) */
+  deltaMass?: number;
 }
 
 /**
  * Common modifications with their details.
  */
 export const COMMON_MODIFICATIONS: WizardModification[] = [
-  { name: 'Carbamidomethyl', targetAminoAcids: 'C', type: 'fixed', unimodAccession: 'UNIMOD:4' },
-  { name: 'Oxidation', targetAminoAcids: 'M', type: 'variable', unimodAccession: 'UNIMOD:35' },
-  { name: 'Acetyl', targetAminoAcids: 'Protein N-term', type: 'variable', unimodAccession: 'UNIMOD:1' },
-  { name: 'Phospho', targetAminoAcids: 'S,T,Y', type: 'variable', unimodAccession: 'UNIMOD:21' },
-  { name: 'Deamidated', targetAminoAcids: 'N,Q', type: 'variable', unimodAccession: 'UNIMOD:7' },
-  { name: 'TMT6plex', targetAminoAcids: 'K,Peptide N-term', type: 'fixed', unimodAccession: 'UNIMOD:737' },
+  { name: 'Carbamidomethyl', targetAminoAcids: 'C', type: 'fixed', position: 'Anywhere', unimodAccession: 'UNIMOD:4', deltaMass: 57.021464 },
+  { name: 'Oxidation', targetAminoAcids: 'M', type: 'variable', position: 'Anywhere', unimodAccession: 'UNIMOD:35', deltaMass: 15.994915 },
+  { name: 'Acetyl', targetAminoAcids: 'N-term', type: 'variable', position: 'Protein N-term', unimodAccession: 'UNIMOD:1', deltaMass: 42.010565 },
+  { name: 'Phospho', targetAminoAcids: 'S,T,Y', type: 'variable', position: 'Anywhere', unimodAccession: 'UNIMOD:21', deltaMass: 79.966331 },
+  { name: 'Deamidated', targetAminoAcids: 'N,Q', type: 'variable', position: 'Anywhere', unimodAccession: 'UNIMOD:7', deltaMass: 0.984016 },
+  { name: 'TMT6plex', targetAminoAcids: 'K', type: 'fixed', position: 'Anywhere', unimodAccession: 'UNIMOD:737', deltaMass: 229.162932 },
+  { name: 'TMT6plex', targetAminoAcids: 'N-term', type: 'fixed', position: 'Any N-term', unimodAccession: 'UNIMOD:737', deltaMass: 229.162932 },
+  { name: 'TMTpro', targetAminoAcids: 'K', type: 'fixed', position: 'Anywhere', unimodAccession: 'UNIMOD:2016', deltaMass: 304.207146 },
+  { name: 'TMTpro', targetAminoAcids: 'N-term', type: 'fixed', position: 'Any N-term', unimodAccession: 'UNIMOD:2016', deltaMass: 304.207146 },
+  { name: 'GlyGly', targetAminoAcids: 'K', type: 'variable', position: 'Anywhere', unimodAccession: 'UNIMOD:121', deltaMass: 114.042927 },
 ];
 
 // ============ Cleavage Agent ============
@@ -207,6 +275,18 @@ export interface WizardDataFile {
 // ============ Wizard State ============
 
 /**
+ * Dynamic column default value.
+ */
+export interface DynamicColumnDefault {
+  /** Column name */
+  columnName: string;
+  /** Default value (applies to all samples unless overridden) */
+  value: string;
+  /** Ontology term if selected from autocomplete */
+  ontologyTerm?: OntologyTerm;
+}
+
+/**
  * Complete wizard state.
  */
 export interface WizardState {
@@ -231,6 +311,9 @@ export interface WizardState {
   strainBreed: string;
   developmentalStage: string;
 
+  // Step 2: Dynamic column defaults from template
+  dynamicColumnDefaults: DynamicColumnDefault[];
+
   // Step 3: Sample-specific values
   samples: WizardSampleEntry[];
 
@@ -250,6 +333,17 @@ export interface WizardState {
   // Step 6: Data Files
   fileNamingPattern: string;
   dataFiles: WizardDataFile[];
+}
+
+/**
+ * Creates a default sample entry.
+ */
+export function createDefaultSample(index: number): WizardSampleEntry {
+  return {
+    index,
+    sourceName: `sample_${index}`,
+    biologicalReplicate: 1,
+  };
 }
 
 /**
@@ -278,8 +372,11 @@ export function createEmptyWizardState(): WizardState {
     strainBreed: '',
     developmentalStage: '',
 
-    // Step 3
-    samples: [],
+    // Step 2 (dynamic)
+    dynamicColumnDefaults: [],
+
+    // Step 3 - Initialize with one sample to match sampleCount
+    samples: [createDefaultSample(1)],
 
     // Step 4
     labelConfigId: 'lf',

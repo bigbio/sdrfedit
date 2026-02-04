@@ -90,6 +90,23 @@ export class LlmSettingsService {
   }
 
   /**
+   * Checks if any LLM provider is configured with an API key.
+   * Ollama doesn't require an API key, so it's always considered configured if selected.
+   */
+  isAnyProviderConfigured(): boolean {
+    const activeProvider = this.settings.activeProvider;
+
+    // Ollama doesn't require an API key
+    if (activeProvider === 'ollama') {
+      return true;
+    }
+
+    // Check if active provider has an API key
+    const config = this.getProviderConfig(activeProvider);
+    return !!(config?.apiKey && config.apiKey.length > 0);
+  }
+
+  /**
    * Updates configuration for a provider.
    */
   async setProviderConfig(

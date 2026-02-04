@@ -14,35 +14,15 @@ import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.compon
   imports: [FormsModule, SdrfEditorComponent],
   template: `
     <div class="app-container">
-      @if (showHeader) {
-        <header class="app-header">
-          <h1>SDRF Editor</h1>
-          <p>Standalone SDRF (Sample and Data Relationship Format) editor for proteomics metadata</p>
-        </header>
-      }
-
       <main class="app-main">
-        <div class="app-controls">
-          <label>
-            Load from URL:
-            <input
-              type="text"
-              [(ngModel)]="sdrfUrl"
-              placeholder="Enter SDRF URL..."
-              class="url-input"
-            />
-          </label>
-          <button (click)="loadUrl()" class="btn btn-primary">Load</button>
-          <button (click)="loadSample()" class="btn btn-secondary">Load Sample</button>
-        </div>
-
-        <div class="editor-wrapper">
-          <sdrf-editor-table
-            [url]="activeUrl"
-            (tableChange)="onTableChange($event)"
-            (validationComplete)="onValidation($event)"
-          ></sdrf-editor-table>
-        </div>
+        <sdrf-editor-table
+          [url]="activeUrl"
+          [exampleUrl]="exampleUrl"
+          (tableChange)="onTableChange($event)"
+          (validationComplete)="onValidation($event)"
+          (loadUrlRequested)="onLoadUrlRequested($event)"
+          (loadExampleRequested)="onLoadExampleRequested()"
+        ></sdrf-editor-table>
       </main>
     </div>
   `,
@@ -53,23 +33,6 @@ import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.compon
       height: 100vh;
     }
 
-    .app-header {
-      padding: 16px 24px;
-      background: #1a1a2e;
-      color: white;
-    }
-
-    .app-header h1 {
-      margin: 0 0 4px 0;
-      font-size: 24px;
-    }
-
-    .app-header p {
-      margin: 0;
-      opacity: 0.8;
-      font-size: 14px;
-    }
-
     .app-main {
       flex: 1;
       display: flex;
@@ -77,97 +40,35 @@ import { SdrfEditorComponent } from './components/sdrf-editor/sdrf-editor.compon
       overflow: hidden;
     }
 
-    .app-controls {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px 24px;
-      background: #f5f5f5;
-      border-bottom: 1px solid #ddd;
-    }
-
-    .app-controls label {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex: 1;
-    }
-
-    .url-input {
-      flex: 1;
-      padding: 8px 12px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 14px;
-    }
-
-    .btn {
-      padding: 8px 16px;
-      border: none;
-      border-radius: 4px;
-      font-size: 14px;
-      cursor: pointer;
-      transition: background-color 0.2s;
-    }
-
-    .btn-primary {
-      background: #0066cc;
-      color: white;
-    }
-
-    .btn-primary:hover {
-      background: #0055aa;
-    }
-
-    .btn-secondary {
-      background: #6c757d;
-      color: white;
-    }
-
-    .btn-secondary:hover {
-      background: #5a6268;
-    }
-
-    .editor-wrapper {
-      flex: 1;
-      overflow: hidden;
-    }
-
-    sdrf-editor {
+    sdrf-editor-table {
       display: block;
       height: 100%;
     }
   `]
 })
 export class AppComponent implements OnInit {
-  /** Control visibility of the header section. Set to false when embedding in another site. */
-  @Input() showHeader = true;
-
-  sdrfUrl = '';
   activeUrl = '';
 
-  // Sample SDRF from proteomics-metadata-standard
-  readonly sampleUrl = 'https://raw.githubusercontent.com/bigbio/proteomics-metadata-standard/master/annotated-projects/PXD000070/PXD000070.sdrf.tsv';
+  // Example SDRF from proteomics-metadata-standard
+  readonly exampleUrl = 'https://raw.githubusercontent.com/bigbio/proteomics-metadata-standard/master/annotated-projects/PXD000070/PXD000070.sdrf.tsv';
 
   ngOnInit(): void {
     // Check for URL parameter to auto-load SDRF file
     const urlParams = new URLSearchParams(window.location.search);
     const urlParam = urlParams.get('url');
     if (urlParam) {
-      this.sdrfUrl = urlParam;
       this.activeUrl = urlParam;
     }
   }
 
-  loadUrl(): void {
-    if (this.sdrfUrl) {
-      this.activeUrl = this.sdrfUrl;
+  onLoadUrlRequested(url: string): void {
+    if (url) {
+      this.activeUrl = url;
     }
   }
 
-  loadSample(): void {
-    this.sdrfUrl = this.sampleUrl;
-    this.activeUrl = this.sampleUrl;
+  onLoadExampleRequested(): void {
+    this.activeUrl = this.exampleUrl;
   }
 
   onTableChange(table: unknown): void {
