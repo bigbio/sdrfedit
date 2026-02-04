@@ -35,13 +35,41 @@ import { olsService, type DirectOlsService } from '../../../core/services/ols.se
         </p>
       </div>
 
+      <!-- Info Banner -->
+      <div class="info-banner">
+        <span class="info-icon">i</span>
+        <div class="info-content">
+          <strong>SDRF Characteristics Columns</strong>
+          <p>
+            These fields map to <code>characteristics[...]</code> columns in your SDRF file.
+            Values should use controlled vocabulary terms from ontologies (NCBI Taxonomy, MONDO, UBERON).
+            <a href="https://github.com/bigbio/proteomics-metadata-standard/tree/master/sdrf-proteomics" target="_blank" rel="noopener">Learn more about SDRF-Proteomics</a>
+          </p>
+        </div>
+      </div>
+
       <!-- Organism -->
       <div class="form-section">
         <label class="form-label">
           Organism
           <span class="required">*</span>
+          <button type="button" class="help-btn" (click)="toggleHelp('organism')" title="Learn more">?</button>
           <span class="help-text">Species of your samples (e.g., Homo sapiens, Mus musculus)</span>
         </label>
+        @if (activeHelp() === 'organism') {
+          <div class="help-tooltip">
+            <strong>characteristics[organism]</strong>
+            <p>The taxonomic species from which the sample originates. Uses <strong>NCBI Taxonomy</strong> ontology.</p>
+            <div class="help-details">
+              <div class="help-row"><span class="help-key">Ontology:</span> NCBITaxon</div>
+              <div class="help-row"><span class="help-key">Format:</span> Species name (e.g., "Homo sapiens")</div>
+              <div class="help-row"><span class="help-key">Requirement:</span> <span class="badge-required">Required</span></div>
+            </div>
+            <div class="help-examples">
+              <strong>Examples:</strong> Homo sapiens, Mus musculus, Rattus norvegicus, Saccharomyces cerevisiae
+            </div>
+          </div>
+        }
         <div class="autocomplete-container">
           <input
             type="text"
@@ -85,8 +113,23 @@ import { olsService, type DirectOlsService } from '../../../core/services/ols.se
         <label class="form-label">
           Disease
           <span class="required">*</span>
+          <button type="button" class="help-btn" (click)="toggleHelp('disease')" title="Learn more">?</button>
           <span class="help-text">Disease being studied or 'normal' for healthy samples</span>
         </label>
+        @if (activeHelp() === 'disease') {
+          <div class="help-tooltip">
+            <strong>characteristics[disease]</strong>
+            <p>The disease or condition being studied. For healthy/control samples, use <strong>"normal"</strong> (PATO:0000461).</p>
+            <div class="help-details">
+              <div class="help-row"><span class="help-key">Ontologies:</span> MONDO, EFO, DOID, PATO</div>
+              <div class="help-row"><span class="help-key">Format:</span> Disease name or "normal"</div>
+              <div class="help-row"><span class="help-key">Requirement:</span> <span class="badge-required">Required</span></div>
+            </div>
+            <div class="help-examples">
+              <strong>Examples:</strong> normal, breast cancer, Alzheimer disease, diabetes mellitus
+            </div>
+          </div>
+        }
         <div class="autocomplete-container">
           <input
             type="text"
@@ -126,6 +169,8 @@ import { olsService, type DirectOlsService } from '../../../core/services/ols.se
           <button class="quick-btn" (click)="selectQuickDisease('normal')">normal</button>
           <button class="quick-btn" (click)="selectQuickDiseaseOntology('breast cancer', 'MONDO:0007254')">breast cancer</button>
           <button class="quick-btn" (click)="selectQuickDiseaseOntology('colorectal cancer', 'MONDO:0005575')">colorectal cancer</button>
+          <button class="quick-btn quick-btn-special" (click)="selectSpecialDisease('not applicable')">not applicable</button>
+          <button class="quick-btn quick-btn-special" (click)="selectSpecialDisease('not available')">not available</button>
         </div>
       </div>
 
@@ -134,8 +179,24 @@ import { olsService, type DirectOlsService } from '../../../core/services/ols.se
         <label class="form-label">
           Organism Part / Tissue
           <span class="required">*</span>
+          <button type="button" class="help-btn" (click)="toggleHelp('organismPart')" title="Learn more">?</button>
           <span class="help-text">Tissue or body part (e.g., liver, blood plasma, whole organism)</span>
         </label>
+        @if (activeHelp() === 'organismPart') {
+          <div class="help-tooltip">
+            <strong>characteristics[organism part]</strong>
+            <p>The anatomical tissue or organ from which the sample was derived. For cell lines or whole organisms, use appropriate terms.</p>
+            <div class="help-details">
+              <div class="help-row"><span class="help-key">Ontologies:</span> UBERON, BTO (BRENDA Tissue)</div>
+              <div class="help-row"><span class="help-key">Format:</span> Anatomical term</div>
+              <div class="help-row"><span class="help-key">Special:</span> "not applicable", "not available" allowed</div>
+              <div class="help-row"><span class="help-key">Requirement:</span> <span class="badge-required">Required</span></div>
+            </div>
+            <div class="help-examples">
+              <strong>Examples:</strong> liver, blood plasma, heart, brain, whole organism, not applicable, not available
+            </div>
+          </div>
+        }
         <div class="autocomplete-container">
           <input
             type="text"
@@ -171,6 +232,8 @@ import { olsService, type DirectOlsService } from '../../../core/services/ols.se
           <button class="quick-btn" (click)="selectQuickOrganismPart('liver', 'UBERON:0002107')">liver</button>
           <button class="quick-btn" (click)="selectQuickOrganismPart('blood plasma', 'UBERON:0001969')">blood plasma</button>
           <button class="quick-btn" (click)="selectQuickOrganismPart('whole organism', 'UBERON:0000468')">whole organism</button>
+          <button class="quick-btn quick-btn-special" (click)="selectSpecialOrganismPart('not applicable')">not applicable</button>
+          <button class="quick-btn quick-btn-special" (click)="selectSpecialOrganismPart('not available')">not available</button>
         </div>
       </div>
 
@@ -178,13 +241,27 @@ import { olsService, type DirectOlsService } from '../../../core/services/ols.se
       @if (wizardState.isHumanTemplate()) {
         <div class="template-fields">
           <h4>Human-specific Fields</h4>
+          <p class="template-fields-desc">
+            Required for human samples per SDRF-Proteomics specification. Values like "anonymized" or "pooled" are accepted when applicable.
+          </p>
 
           <div class="form-row">
             <div class="form-section">
               <label class="form-label">
                 Default Sex
+                <button type="button" class="help-btn" (click)="toggleHelp('sex')" title="Learn more">?</button>
                 <span class="help-text">Biological sex (can be overridden per sample)</span>
               </label>
+              @if (activeHelp() === 'sex') {
+                <div class="help-tooltip">
+                  <strong>characteristics[sex]</strong>
+                  <p>Biological sex of the sample donor.</p>
+                  <div class="help-details">
+                    <div class="help-row"><span class="help-key">Allowed values:</span> male, female, intersex, not available, anonymized, pooled</div>
+                    <div class="help-row"><span class="help-key">Requirement:</span> <span class="badge-recommended">Recommended</span></div>
+                  </div>
+                </div>
+              }
               <select
                 class="form-select"
                 [ngModel]="state().defaultSex"
@@ -200,8 +277,24 @@ import { olsService, type DirectOlsService } from '../../../core/services/ols.se
             <div class="form-section">
               <label class="form-label">
                 Default Age
+                <button type="button" class="help-btn" (click)="toggleHelp('age')" title="Learn more">?</button>
                 <span class="help-text">Format: 25Y (years), 6M (months), or not available</span>
               </label>
+              @if (activeHelp() === 'age') {
+                <div class="help-tooltip">
+                  <strong>characteristics[age]</strong>
+                  <p>Age of the sample donor at collection time. Use standard age format.</p>
+                  <div class="help-details">
+                    <div class="help-row"><span class="help-key">Format:</span> Number + unit (Y=years, M=months, D=days)</div>
+                    <div class="help-row"><span class="help-key">Ranges:</span> 40Y-50Y for age ranges</div>
+                    <div class="help-row"><span class="help-key">Special:</span> not available, anonymized, pooled</div>
+                    <div class="help-row"><span class="help-key">Requirement:</span> <span class="badge-recommended">Recommended</span></div>
+                  </div>
+                  <div class="help-examples">
+                    <strong>Examples:</strong> 45Y, 6M, 30Y6M, 40Y-50Y, not available
+                  </div>
+                </div>
+              }
               <input
                 type="text"
                 class="form-input"
@@ -461,6 +554,17 @@ import { olsService, type DirectOlsService } from '../../../core/services/ols.se
       border-color: #d1d5db;
     }
 
+    .quick-btn-special {
+      background: #fef3c7;
+      border-color: #fcd34d;
+      color: #92400e;
+    }
+
+    .quick-btn-special:hover {
+      background: #fde68a;
+      border-color: #f59e0b;
+    }
+
     .template-fields {
       margin-top: 32px;
       padding-top: 24px;
@@ -468,10 +572,16 @@ import { olsService, type DirectOlsService } from '../../../core/services/ols.se
     }
 
     .template-fields h4 {
-      margin: 0 0 16px 0;
+      margin: 0 0 8px 0;
       font-size: 15px;
       font-weight: 600;
       color: #374151;
+    }
+
+    .template-fields-desc {
+      margin: 0 0 16px 0;
+      font-size: 13px;
+      color: #6b7280;
     }
 
     .form-row {
@@ -506,6 +616,177 @@ import { olsService, type DirectOlsService } from '../../../core/services/ols.se
       font-weight: bold;
     }
 
+    /* Info Banner */
+    .info-banner {
+      display: flex;
+      gap: 12px;
+      padding: 14px 16px;
+      background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%);
+      border: 1px solid #bfdbfe;
+      border-radius: 10px;
+      margin-bottom: 24px;
+    }
+
+    .info-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #3b82f6;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .info-content {
+      flex: 1;
+    }
+
+    .info-content strong {
+      display: block;
+      font-size: 14px;
+      color: #1e40af;
+      margin-bottom: 4px;
+    }
+
+    .info-content p {
+      margin: 0;
+      font-size: 13px;
+      color: #4b5563;
+      line-height: 1.5;
+    }
+
+    .info-content code {
+      background: #dbeafe;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 12px;
+      color: #1e40af;
+    }
+
+    .info-content a {
+      color: #2563eb;
+      text-decoration: none;
+    }
+
+    .info-content a:hover {
+      text-decoration: underline;
+    }
+
+    /* Help Button */
+    .help-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #e5e7eb;
+      border: none;
+      font-size: 11px;
+      font-weight: 600;
+      color: #6b7280;
+      cursor: pointer;
+      margin-left: 6px;
+      vertical-align: middle;
+      transition: all 0.15s;
+    }
+
+    .help-btn:hover {
+      background: #3b82f6;
+      color: white;
+    }
+
+    /* Help Tooltip */
+    .help-tooltip {
+      margin: 12px 0;
+      padding: 14px 16px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-left: 4px solid #3b82f6;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+
+    .help-tooltip strong {
+      display: block;
+      color: #1e40af;
+      font-family: monospace;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .help-tooltip p {
+      margin: 0 0 12px 0;
+      color: #4b5563;
+      line-height: 1.5;
+    }
+
+    .help-details {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 12px;
+    }
+
+    .help-row {
+      display: flex;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .help-key {
+      color: #6b7280;
+      min-width: 90px;
+    }
+
+    .badge-required {
+      display: inline-block;
+      padding: 2px 8px;
+      background: #fef2f2;
+      color: #dc2626;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .badge-recommended {
+      display: inline-block;
+      padding: 2px 8px;
+      background: #fefce8;
+      color: #ca8a04;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .badge-optional {
+      display: inline-block;
+      padding: 2px 8px;
+      background: #f0fdf4;
+      color: #16a34a;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .help-examples {
+      font-size: 12px;
+      color: #6b7280;
+      padding-top: 8px;
+      border-top: 1px solid #e5e7eb;
+    }
+
+    .help-examples strong {
+      display: inline;
+      color: #374151;
+      font-family: inherit;
+      font-size: 12px;
+    }
+
     @media (max-width: 600px) {
       .form-row {
         grid-template-columns: 1fr;
@@ -536,9 +817,35 @@ export class SampleCharacteristicsComponent {
   readonly showDiseaseResults = signal(false);
   readonly showOrganismPartResults = signal(false);
 
+  // Help tooltip state
+  readonly activeHelp = signal<string | null>(null);
+
+  /** Toggle help tooltip for a field */
+  toggleHelp(field: string): void {
+    this.activeHelp.set(this.activeHelp() === field ? null : field);
+  }
+
+  // Special values for organism (metaproteomics)
+  private readonly specialOrganismValues: OntologyTerm[] = [
+    { id: 'not applicable', label: 'not applicable', ontology: 'SDRF' },
+  ];
+
   // Organism search
   async searchOrganism(query: string): Promise<void> {
     this.organismSearch.set(query);
+    const lowerQuery = query.toLowerCase().trim();
+
+    // Check for special values first
+    const matchingSpecial = this.specialOrganismValues.filter(v =>
+      v.label.toLowerCase().includes(lowerQuery)
+    );
+
+    if (lowerQuery === 'not' || lowerQuery === 'not a' || lowerQuery === 'not applicable') {
+      this.organismResults.set(matchingSpecial);
+      this.showOrganismResults.set(true);
+      return;
+    }
+
     if (query.length < 2) {
       this.organismResults.set([]);
       return;
@@ -546,14 +853,16 @@ export class SampleCharacteristicsComponent {
 
     try {
       const results = await this.ols.searchOrganism(query);
-      this.organismResults.set(results.map(r => ({
+      const ontologyResults = results.map(r => ({
         id: r.id,
         label: r.label,
         ontology: r.ontologyPrefix?.toUpperCase() || 'NCBITAXON',
-      })));
+      }));
+      this.organismResults.set([...matchingSpecial, ...ontologyResults]);
       this.showOrganismResults.set(true);
     } catch {
-      this.organismResults.set([]);
+      this.organismResults.set(matchingSpecial);
+      this.showOrganismResults.set(true);
     }
   }
 
@@ -572,13 +881,26 @@ export class SampleCharacteristicsComponent {
     this.wizardState.setOrganism(null as any);
   }
 
+  // Special values for disease
+  private readonly specialDiseaseValues: OntologyTerm[] = [
+    { id: 'PATO:0000461', label: 'normal', ontology: 'PATO' },
+    { id: 'not applicable', label: 'not applicable', ontology: 'SDRF' },
+    { id: 'not available', label: 'not available', ontology: 'SDRF' },
+  ];
+
   // Disease search
   async searchDisease(query: string): Promise<void> {
     this.diseaseSearch.set(query);
+    const lowerQuery = query.toLowerCase().trim();
 
-    // Check for "normal" keyword
-    if (query.toLowerCase() === 'normal') {
-      this.diseaseResults.set([{ id: 'PATO:0000461', label: 'normal', ontology: 'PATO' }]);
+    // Check for special values first
+    const matchingSpecial = this.specialDiseaseValues.filter(v =>
+      v.label.toLowerCase().includes(lowerQuery)
+    );
+
+    if (lowerQuery === 'normal' || lowerQuery === 'not' || lowerQuery === 'not a' ||
+        lowerQuery === 'not available' || lowerQuery === 'not applicable') {
+      this.diseaseResults.set(matchingSpecial);
       this.showDiseaseResults.set(true);
       return;
     }
@@ -590,14 +912,17 @@ export class SampleCharacteristicsComponent {
 
     try {
       const results = await this.ols.searchDisease(query);
-      this.diseaseResults.set(results.map(r => ({
+      const ontologyResults = results.map(r => ({
         id: r.id,
         label: r.label,
         ontology: r.ontologyPrefix?.toUpperCase() || 'MONDO',
-      })));
+      }));
+      // Prepend matching special values
+      this.diseaseResults.set([...matchingSpecial, ...ontologyResults]);
       this.showDiseaseResults.set(true);
     } catch {
-      this.diseaseResults.set([]);
+      this.diseaseResults.set(matchingSpecial);
+      this.showDiseaseResults.set(true);
     }
   }
 
@@ -617,6 +942,11 @@ export class SampleCharacteristicsComponent {
 
   selectQuickDiseaseOntology(label: string, id: string): void {
     this.selectDisease({ id, label, ontology: 'MONDO' });
+  }
+
+  /** Select a special value for disease (not applicable, not available) */
+  selectSpecialDisease(value: string): void {
+    this.selectDisease({ id: value, label: value, ontology: 'SDRF' });
   }
 
   clearDisease(): void {
@@ -640,9 +970,29 @@ export class SampleCharacteristicsComponent {
     return disease.id;
   }
 
+  // Special values allowed for organism part per SDRF spec
+  private readonly specialOrganismPartValues: OntologyTerm[] = [
+    { id: 'not applicable', label: 'not applicable', ontology: 'SDRF' },
+    { id: 'not available', label: 'not available', ontology: 'SDRF' },
+  ];
+
   // Organism Part search
   async searchOrganismPart(query: string): Promise<void> {
     this.organismPartSearch.set(query);
+    const lowerQuery = query.toLowerCase().trim();
+
+    // Check for special values first
+    const matchingSpecial = this.specialOrganismPartValues.filter(v =>
+      v.label.toLowerCase().includes(lowerQuery)
+    );
+
+    if (lowerQuery === 'not' || lowerQuery === 'not a' || lowerQuery === 'not av' ||
+        lowerQuery === 'not available' || lowerQuery === 'not applicable') {
+      this.organismPartResults.set(matchingSpecial);
+      this.showOrganismPartResults.set(true);
+      return;
+    }
+
     if (query.length < 2) {
       this.organismPartResults.set([]);
       return;
@@ -650,14 +1000,17 @@ export class SampleCharacteristicsComponent {
 
     try {
       const results = await this.ols.searchTissue(query);
-      this.organismPartResults.set(results.map(r => ({
+      const ontologyResults = results.map(r => ({
         id: r.id,
         label: r.label,
         ontology: r.ontologyPrefix?.toUpperCase() || 'UBERON',
-      })));
+      }));
+      // Prepend special values if they match
+      this.organismPartResults.set([...matchingSpecial, ...ontologyResults]);
       this.showOrganismPartResults.set(true);
     } catch {
-      this.organismPartResults.set([]);
+      this.organismPartResults.set(matchingSpecial);
+      this.showOrganismPartResults.set(true);
     }
   }
 
@@ -670,6 +1023,11 @@ export class SampleCharacteristicsComponent {
 
   selectQuickOrganismPart(label: string, id: string): void {
     this.selectOrganismPart({ id, label, ontology: 'UBERON' });
+  }
+
+  /** Select a special value for organism part (not applicable, not available) */
+  selectSpecialOrganismPart(value: string): void {
+    this.selectOrganismPart({ id: value, label: value, ontology: 'SDRF' });
   }
 
   clearOrganismPart(): void {

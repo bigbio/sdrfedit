@@ -1782,6 +1782,7 @@ export class SdrfRecommendPanelComponent implements OnChanges, AfterViewInit {
   @Output() batchApply = new EventEmitter<BatchApplyEvent>();
   @Output() previewRecommendation = new EventEmitter<SdrfRecommendation>();
   @Output() applyFix = new EventEmitter<ApplyFixEvent>();
+  @Output() openChat = new EventEmitter<string>();
 
   // State
   readonly activeTab = signal<ViewTab>('quality');
@@ -2223,10 +2224,25 @@ Output: JSON with recommendations array containing type, column, suggestedValue,
         this.dismissActionableSuggestion(suggestion);
         break;
 
+      case 'chat':
+        this.explainSuggestion(suggestion);
+        break;
+
       case 'alternatives':
         // Handled by card component
         break;
     }
+  }
+
+  /**
+   * Opens chat with an explanation request for the suggestion.
+   */
+  explainSuggestion(suggestion: ActionableSuggestion): void {
+    // Build the explanation prompt
+    const prompt = this.enrichmentService.buildExplanationPrompt(suggestion);
+
+    // Emit event to open chat with this prompt
+    this.openChat.emit(prompt);
   }
 
   /**

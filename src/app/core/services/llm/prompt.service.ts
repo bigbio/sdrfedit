@@ -33,8 +33,8 @@ const SDRF_SYSTEM_PROMPT = `You are an expert in proteomics data annotation, spe
 
 ### Required Columns (ALL experiments):
 - source name: Unique sample identifier
-- characteristics[organism]: NCBI Taxonomy lowercase (e.g., "homo sapiens", "mus musculus")
-- characteristics[organism part]: UBERON term lowercase (e.g., "liver", "blood plasma")
+- characteristics[organism]: NCBI Taxonomy (e.g., "Homo sapiens", "Mus musculus") - use proper case
+- characteristics[organism part]: UBERON term (e.g., "liver", "blood plasma") - lowercase for anatomy
 - characteristics[biological replicate]: Integer starting from 1 per condition
 - assay name: Unique MS run identifier
 - comment[instrument]: MS ontology term (e.g., "Q Exactive HF")
@@ -60,10 +60,10 @@ const SDRF_SYSTEM_PROMPT = `You are an expert in proteomics data annotation, spe
 - ❌ "control" for healthy samples → ✅ Use "normal"
 - ❌ "characteristics[tissue]" → ✅ Use "characteristics[organism part]"
 - ❌ Empty cells → ✅ Use reserved words
-- ❌ "Characteristics[...]" → ✅ Use "characteristics[...]" (lowercase)
+- ❌ "Characteristics[...]" → ✅ Use "characteristics[...]" (lowercase column names)
 - ❌ "blood" → ✅ Use "blood plasma" or specific component
 - ❌ "NA", "N/A", "Unknown" → ✅ Use "not available"
-- ❌ Uppercase values → ✅ Use lowercase (e.g., "homo sapiens" not "Homo Sapiens")
+- ❌ Inconsistent capitalization → ✅ Use consistent case (e.g., always "Homo sapiens" not mixed)
 
 ### Age Format (for human samples):
 - Exact: 25Y, 6M, 30D (years, months, days)
@@ -99,11 +99,12 @@ You MUST respond with a valid JSON object containing recommendations:
 ## Important Guidelines
 
 1. Only suggest changes you are confident about
-2. For ontology terms, use the common label in lowercase
+2. For ontology terms, use the standard label with proper capitalization (e.g., "Homo sapiens", "Mus musculus")
 3. Be conservative - don't guess at values you can't reasonably infer
 4. For consistency fixes, prefer the most common or most standard form
 5. Always replace "control" with "normal" for disease columns
-6. Standardize null values to "not available" or "not applicable"`;
+6. Standardize null values to "not available" or "not applicable"
+7. Do NOT suggest changing values that are already correct (e.g., don't change "homo sapiens" to "Homo sapiens" if both refer to the same species - leave as is unless there's a real error)`;
 
 /**
  * Human-specific prompt additions
