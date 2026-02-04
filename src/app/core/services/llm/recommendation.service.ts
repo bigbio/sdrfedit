@@ -29,7 +29,7 @@ import { SdrfTable } from '../../models/sdrf-table';
 import { ILlmProvider } from './providers/base-provider';
 import { OpenAIProvider } from './providers/openai-provider';
 import { ContextBuilderService, YamlTemplate } from './context-builder.service';
-import { PromptService, QualityIssueForPrompt } from './prompt.service';
+import { PromptService, QualityIssueForPrompt, ValidatorError } from './prompt.service';
 import { LlmSettingsService, llmSettingsService } from './settings.service';
 import { ColumnQualityService, TableQualityResult, ColumnQuality } from '../column-quality.service';
 import {
@@ -412,11 +412,13 @@ export class RecommendationService {
   /**
    * Analyzes SDRF with streaming and OLS validation.
    * Yields progress updates including streaming content and enrichment progress.
+   * @param validatorErrors - Optional validation errors from SDRF-pipelines validator to include in prompts
    */
   async *analyzeActionableStreaming(
     table: SdrfTable,
     focusAreas: AnalysisFocusArea[] = ['all'],
-    template?: YamlTemplate
+    template?: YamlTemplate,
+    validatorErrors?: ValidatorError[]
   ): AsyncGenerator<AnalysisProgress, ActionableRecommendationResult, unknown> {
     const provider = await this.getActiveProvider();
     const config = this.settingsService.getActiveProviderConfig();
@@ -434,12 +436,13 @@ export class RecommendationService {
       qualityAnalysis.columns
     );
 
-    // Build context and messages
+    // Build context and messages (include validator errors for priority handling)
     const context = this.contextBuilder.buildContext(table, focusAreas, template);
     const messages = this.promptService.buildAnalysisMessages(
       context,
       undefined,
-      qualityIssues
+      qualityIssues,
+      validatorErrors
     );
 
     // Stream LLM response

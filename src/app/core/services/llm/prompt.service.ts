@@ -162,6 +162,18 @@ Common organisms:
 - Zebrafish: "danio rerio"`;
 
 /**
+ * Validation error from SDRF-pipelines validator
+ */
+export interface ValidatorError {
+  message: string;
+  level: 'error' | 'warning';
+  row?: number;
+  column?: string;
+  value?: string;
+  suggestion?: string;
+}
+
+/**
  * Quality issues prompt section
  */
 function buildQualityIssuesPrompt(issues: Array<{column: string; reason: string}>): string {
@@ -173,6 +185,53 @@ function buildQualityIssuesPrompt(issues: Array<{column: string; reason: string}
 ${issues.map(i => `- ${i.column}: ${i.reason}`).join('\n')}
 
 Please address these issues in your recommendations.`;
+}
+
+/**
+ * Validation errors prompt section (from SDRF-pipelines validator)
+ */
+function buildValidatorErrorsPrompt(errors: ValidatorError[]): string {
+  if (errors.length === 0) return '';
+
+  // Group errors by severity
+  const criticalErrors = errors.filter(e => e.level === 'error');
+  const warnings = errors.filter(e => e.level === 'warning');
+
+  const parts: string[] = [];
+  parts.push('\n## SDRF-Pipelines Validator Results (PRIORITY - Address These First):');
+  parts.push(`Found ${criticalErrors.length} errors and ${warnings.length} warnings.\n`);
+
+  // Show errors first (limited to avoid token overload)
+  if (criticalErrors.length > 0) {
+    parts.push('### Errors (Must Fix):');
+    for (const err of criticalErrors.slice(0, 10)) {
+      const location = err.row !== undefined && err.row >= 0 ? `Row ${err.row + 1}` : 'General';
+      const col = err.column ? ` in "${err.column}"` : '';
+      const val = err.value ? ` (current value: "${err.value}")` : '';
+      const sug = err.suggestion ? ` → Suggested fix: ${err.suggestion}` : '';
+      parts.push(`- ${location}${col}${val}: ${err.message}${sug}`);
+    }
+    if (criticalErrors.length > 10) {
+      parts.push(`  ... and ${criticalErrors.length - 10} more errors`);
+    }
+  }
+
+  // Show a few warnings
+  if (warnings.length > 0) {
+    parts.push('\n### Warnings (Should Review):');
+    for (const warn of warnings.slice(0, 5)) {
+      const location = warn.row !== undefined && warn.row >= 0 ? `Row ${warn.row + 1}` : 'General';
+      const col = warn.column ? ` in "${warn.column}"` : '';
+      parts.push(`- ${location}${col}: ${warn.message}`);
+    }
+    if (warnings.length > 5) {
+      parts.push(`  ... and ${warnings.length - 5} more warnings`);
+    }
+  }
+
+  parts.push('\nGenerate recommendations to address these validator findings.');
+
+  return parts.join('\n');
 }
 
 /**
@@ -194,7 +253,8 @@ export class PromptService {
   buildAnalysisMessages(
     context: SdrfAnalysisContext,
     additionalInstructions?: string,
-    qualityIssues?: QualityIssueForPrompt[]
+    qualityIssues?: QualityIssueForPrompt[],
+    validatorErrors?: ValidatorError[]
   ): LlmMessage[] {
     const messages: LlmMessage[] = [];
 
@@ -213,6 +273,11 @@ export class PromptService {
     }
     if (sampleTypes.includes('vertebrate')) {
       systemPrompt += VERTEBRATE_TEMPLATE_PROMPT;
+    }
+
+    // Add validator errors first (highest priority)
+    if (validatorErrors && validatorErrors.length > 0) {
+      systemPrompt += buildValidatorErrorsPrompt(validatorErrors);
     }
 
     // Add quality issues if provided
@@ -592,60 +657,7 @@ Respond with JSON:
   }
 
   /**
-   * Builds a chat system prompt with example context for actionable suggestions.
-   *
-   * @param tableContext - Brief context about the current table
-   * @param qualityContext - Quality issues found in the table
-   * @param examplesContext - Example values from annotated datasets
-   */
-  buildChatSystemPrompt(
-    tableContext: string,
-    qualityContext: string,
-    examplesContext: string
-  ): string {
-    return `You are an SDRF file expert. Help users fix proteomics metadata.
-
-SDRF RULES:
-- Use "normal" for healthy samples (never "control")
-- Use "not available" for missing data (never "NA" or "unknown")
-- Values must be lowercase (e.g., "homo sapiens", "male", "adult")
-- Age format: 25Y, 6M, 30D
-
-TABLE INFO:
-${tableContext}
-
-ISSUES FOUND:
-${qualityContext}
-${examplesContext ? `\nEXAMPLE VALUES:\n${examplesContext}` : ''}
-
-RESPONSE FORMAT - You MUST reply with this exact JSON structure:
-{"text": "your explanation", "suggestions": [{"type": "set_value", "column": "column_name", "sampleIndices": [1,2,3], "suggestedValue": "value", "description": "what this does", "confidence": "high"}]}
-
-RULES:
-- type must be: set_value, remove_column, rename_column, or add_column
-- sampleIndices are 1-based row numbers (1 = first data row)
-- confidence: high, medium, or low
-- If no fix needed, use empty array: {"text": "explanation", "suggestions": []}
-
-Reply ONLY with valid JSON. No markdown, no explanation outside JSON.`;
-  }
-
-  /**
-   * Builds the chat system prompt for non-JSON responses (fallback).
-   */
-  buildSimpleChatPrompt(tableContext: string, qualityContext: string): string {
-    return `You are an expert assistant for SDRF (Sample and Data Relationship Format) files in proteomics.
-
-Current table context:
-${tableContext}
-
-Quality analysis:
-${qualityContext}
-
-Help the user with their questions about their SDRF data. Provide specific, actionable advice. Keep responses concise.`;
-  }
-
-  // ============ Private Methods ============
+// ============ Private Methods ============
 
   /**
    * Formats a focus area for display.

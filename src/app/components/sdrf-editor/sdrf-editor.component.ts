@@ -533,7 +533,6 @@ const BUFFER_ROWS = 10;
           <div class="ai-panel-wrapper">
             <sdrf-recommend-panel
               [table]="table()"
-              [incomingChatMessage]="pendingChatMessage()"
               (close)="toggleRecommendPanel()"
               (openSettings)="openLlmSettings()"
               (applyRecommendation)="onApplyRecommendation($event)"
@@ -1799,9 +1798,6 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   /** Context menu state */
   contextMenu = signal<{ x: number; y: number; row: number; col: number } | null>(null);
 
-  /** Pending chat message to send to AI panel */
-  pendingChatMessage = signal<string | null>(null);
-
   /** Last selected row for shift-click range selection */
   private lastSelectedRow: number | null = null;
 
@@ -2169,36 +2165,13 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   /**
    * Send validation error to AI chat
    */
+  /**
+   * Opens the AI panel when user clicks on a validation error.
+   * The AI recommendations will include all validation errors automatically.
+   */
   sendErrorToAI(error: AggregatedValidationError): void {
-    // Open the AI panel
+    // Open the AI panel - validation errors are automatically included in AI analysis
     this.showRecommendPanel.set(true);
-
-    // Format the error message for the AI
-    const cellInfo = error.cells.length > 0
-      ? `\nAffected rows: ${error.cells.slice(0, 10).map(c => c.row + 1).join(', ')}${error.cells.length > 10 ? ` and ${error.cells.length - 10} more` : ''}`
-      : '';
-
-    const valueInfo = error.cells.length > 0 && error.cells[0].value
-      ? `\nExample value: "${error.cells[0].value}"`
-      : '';
-
-    const suggestionInfo = error.suggestion
-      ? `\nSuggestion: ${error.suggestion}`
-      : '';
-
-    // Create a formatted message to send to the chat
-    const message = `I have a validation error that I need help with:
-
-**Error:** ${error.message}
-**Column:** ${error.column || 'N/A'}${cellInfo}${valueInfo}${suggestionInfo}
-
-How can I fix this?`;
-
-    // Set the pending chat message - this will be picked up by the recommend panel
-    this.pendingChatMessage.set(message);
-
-    // Clear the message after a delay to allow re-sending the same message
-    setTimeout(() => this.pendingChatMessage.set(null), 500);
   }
 
   /**
