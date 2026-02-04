@@ -112,6 +112,73 @@ const BUFFER_ROWS = 10;
         (change)="onFileSelected($event)"
       />
 
+      <!-- Toolbar -->
+      @if (table()) {
+        <div class="sdrf-toolbar">
+          <div class="toolbar-left">
+            <button class="btn btn-secondary" (click)="exportTsv()">
+              Export TSV
+            </button>
+            <button class="btn btn-secondary" (click)="validate()">
+              Validate
+            </button>
+            @if (changeCount() > 0) {
+              <span class="unsaved-indicator" title="{{ changeCount() }} unsaved change(s)">
+                💾 {{ changeCount() }}
+              </span>
+            }
+            <span class="toolbar-divider"></span>
+            <button class="btn btn-secondary" (click)="addRowAtEnd()" title="Add a new row at the end">
+              + Row
+            </button>
+            <button class="btn btn-secondary" (click)="showAddColumnDialog()" title="Add a new column">
+              + Column
+            </button>
+            <span class="toolbar-divider"></span>
+            <button
+              class="btn"
+              [class.btn-active]="showFilterBar()"
+              (click)="toggleFilterBar()"
+              title="Filter rows"
+            >
+              Filter
+            </button>
+            <button
+              class="btn"
+              [class.btn-active]="showStatsPanel()"
+              (click)="toggleStatsPanel()"
+              title="Show column statistics"
+            >
+              Stats
+            </button>
+            <button
+              class="btn btn-ai"
+              [class.btn-active]="showRecommendPanel()"
+              (click)="toggleRecommendPanel()"
+              title="AI-powered recommendations"
+            >
+              AI Assistant
+            </button>
+          </div>
+
+          <div class="toolbar-right">
+            <div class="column-legend">
+              <span class="legend-item source">Sample Accession</span>
+              <span class="legend-item characteristic">Sample Properties</span>
+              <span class="legend-item comment">Data Properties</span>
+              <span class="legend-item factor">Factor Values</span>
+            </div>
+            <span class="table-info">
+              {{ table()!.columns.length }} columns,
+              {{ table()!.sampleCount }} samples
+              @if (visibleRange()) {
+                (showing {{ visibleRange()!.start }}-{{ visibleRange()!.end }})
+              }
+            </span>
+          </div>
+        </div>
+      }
+
       <!-- Loading indicator -->
       @if (loading()) {
         <div class="loading-overlay">
