@@ -9,6 +9,8 @@ import {
   Input,
   inject,
   computed,
+  signal,
+  OnInit,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
@@ -34,6 +36,40 @@ import { TemplateInfo as DynamicTemplateInfo } from '../../../core/models/templa
         </p>
       </div>
 
+      <!-- Template System Info -->
+      <div class="info-banner" (click)="toggleTemplateInfo()">
+        <span class="info-icon">i</span>
+        <div class="info-content">
+          <strong>SDRF Template System</strong>
+          <p>
+            Templates define required metadata columns for your experiment type.
+            Choose from <span class="layer-badge layer-sample">Sample</span> templates for organism-specific fields
+            or <span class="layer-badge layer-technology">Technology</span> templates for MS-specific fields.
+            @if (showTemplateInfo()) {
+              <a class="info-link" href="https://github.com/bigbio/proteomics-metadata-standard/tree/master/sdrf-proteomics" target="_blank" rel="noopener">View SDRF specification</a>
+            }
+          </p>
+        </div>
+        <span class="expand-icon">{{ showTemplateInfo() ? '−' : '+' }}</span>
+      </div>
+
+      @if (showTemplateInfo()) {
+        <div class="template-layers-info">
+          <div class="layer-info">
+            <span class="layer-badge layer-sample">Sample</span>
+            <span class="layer-desc">Organism-specific fields (human, cell-lines, vertebrates)</span>
+          </div>
+          <div class="layer-info">
+            <span class="layer-badge layer-technology">Technology</span>
+            <span class="layer-desc">Analysis method fields (MS proteomics, affinity proteomics)</span>
+          </div>
+          <div class="layer-info">
+            <span class="layer-badge layer-experiment">Experiment</span>
+            <span class="layer-desc">Specialized workflow fields (DIA, immunopeptidomics)</span>
+          </div>
+        </div>
+      }
+
       <!-- Template Cards -->
       <div class="template-grid">
         @for (template of templates(); track template.id) {
@@ -44,12 +80,19 @@ import { TemplateInfo as DynamicTemplateInfo } from '../../../core/models/templa
           >
             <div class="template-icon">{{ getIcon(template.id) }}</div>
             <div class="template-info">
-              <h4>{{ template.name }}</h4>
-              <p>{{ template.description }}</p>
-              <div class="template-examples">
-                <span class="example-label">Examples:</span>
-                {{ template.examples.join(', ') }}
+              <div class="template-header">
+                <h4>{{ template.name }}</h4>
+                <span class="layer-badge" [class]="'layer-' + (template.layer || 'sample')">
+                  {{ template.layer || 'sample' }}
+                </span>
               </div>
+              <p>{{ template.description }}</p>
+              @if (template.examples && template.examples.length > 0) {
+                <div class="template-examples">
+                  <span class="example-label">Examples:</span>
+                  {{ template.examples.join(', ') }}
+                </div>
+              }
             </div>
             @if (wizardState.template() === template.id) {
               <div class="selected-badge">&#10003;</div>
@@ -190,13 +233,6 @@ import { TemplateInfo as DynamicTemplateInfo } from '../../../core/models/templa
     .template-info {
       flex: 1;
       min-width: 0;
-    }
-
-    .template-info h4 {
-      margin: 0 0 4px 0;
-      font-size: 15px;
-      font-weight: 600;
-      color: #1f2937;
     }
 
     .template-info p {
@@ -359,6 +395,135 @@ import { TemplateInfo as DynamicTemplateInfo } from '../../../core/models/templa
       font-weight: bold;
     }
 
+    /* Info Banner */
+    .info-banner {
+      display: flex;
+      gap: 12px;
+      padding: 14px 16px;
+      background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%);
+      border: 1px solid #bfdbfe;
+      border-radius: 10px;
+      margin-bottom: 16px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .info-banner:hover {
+      background: linear-gradient(135deg, #dbeafe 0%, #dcfce7 100%);
+    }
+
+    .info-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #3b82f6;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .info-content {
+      flex: 1;
+    }
+
+    .info-content strong {
+      display: block;
+      font-size: 14px;
+      color: #1e40af;
+      margin-bottom: 4px;
+    }
+
+    .info-content p {
+      margin: 0;
+      font-size: 13px;
+      color: #4b5563;
+      line-height: 1.5;
+    }
+
+    .info-link {
+      color: #2563eb;
+      text-decoration: none;
+      margin-left: 8px;
+    }
+
+    .info-link:hover {
+      text-decoration: underline;
+    }
+
+    .expand-icon {
+      font-size: 18px;
+      color: #6b7280;
+      font-weight: bold;
+    }
+
+    /* Template Layers Info */
+    .template-layers-info {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 14px 16px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+
+    .layer-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .layer-desc {
+      font-size: 13px;
+      color: #6b7280;
+    }
+
+    /* Layer Badges */
+    .layer-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .layer-sample {
+      background: #dbeafe;
+      color: #1e40af;
+    }
+
+    .layer-technology {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .layer-experiment {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    /* Template Header with Layer */
+    .template-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    .template-header h4 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: #1f2937;
+    }
+
     @media (max-width: 600px) {
       .template-grid {
         grid-template-columns: 1fr;
@@ -366,7 +531,7 @@ import { TemplateInfo as DynamicTemplateInfo } from '../../../core/models/templa
     }
   `],
 })
-export class ExperimentSetupComponent {
+export class ExperimentSetupComponent implements OnInit {
   @Input() aiEnabled = false;
   @Input() availableTemplates: string[] = ['human', 'cell-lines', 'vertebrates', 'ms-proteomics'];
 
@@ -377,6 +542,19 @@ export class ExperimentSetupComponent {
   readonly staticTemplates = WIZARD_TEMPLATES;
 
   readonly state = this.wizardState.state;
+
+  /** Show/hide template system info */
+  readonly showTemplateInfo = signal(false);
+
+  /** Toggle template info panel */
+  toggleTemplateInfo(): void {
+    this.showTemplateInfo.update(v => !v);
+  }
+
+  ngOnInit(): void {
+    // Trigger template fetch on component init
+    this.templateService.fetchTemplates();
+  }
 
   /** Get templates filtered by availableTemplates input */
   readonly templates = computed(() => {
@@ -389,16 +567,46 @@ export class ExperimentSetupComponent {
         name: t.name,
         description: t.description,
         icon: t.icon || 'category',
-        examples: [] as string[],
+        layer: t.layer || 'sample',
+        examples: this.getTemplateExamples(t.id),
       }));
     }
 
     // Fall back to static templates filtered by availableTemplates
-    return this.staticTemplates.filter(t =>
-      this.availableTemplates.includes(t.id) ||
-      this.availableTemplates.includes(t.id.replace('-', '-'))
-    );
+    return this.staticTemplates
+      .filter(t =>
+        this.availableTemplates.includes(t.id) ||
+        this.availableTemplates.includes(t.id.replace('-', '-'))
+      )
+      .map(t => ({
+        ...t,
+        layer: this.getStaticTemplateLayer(t.id),
+      }));
   });
+
+  /** Get layer for static templates */
+  private getStaticTemplateLayer(templateId: string): string {
+    const layerMap: Record<string, string> = {
+      'human': 'sample',
+      'cell-lines': 'sample',
+      'vertebrates': 'sample',
+      'ms-proteomics': 'technology',
+    };
+    return layerMap[templateId] || 'sample';
+  }
+
+  /** Get example use cases for templates */
+  private getTemplateExamples(templateId: string): string[] {
+    const exampleMap: Record<string, string[]> = {
+      'human': ['Patient biopsies', 'Blood samples', 'Tumor tissues'],
+      'cell-lines': ['HeLa cells', 'HEK293', 'MCF-7'],
+      'vertebrates': ['Mouse liver', 'Rat brain', 'Zebrafish'],
+      'ms-proteomics': ['DDA', 'DIA', 'PRM', 'SRM'],
+      'invertebrates': ['Drosophila', 'C. elegans', 'Insects'],
+      'plants': ['Arabidopsis', 'Rice', 'Wheat'],
+    };
+    return exampleMap[templateId] || [];
+  }
 
   /** Check if templates are still loading */
   readonly isLoading = this.templateService.isLoading;

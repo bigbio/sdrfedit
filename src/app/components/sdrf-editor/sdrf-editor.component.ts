@@ -112,6 +112,72 @@ const BUFFER_ROWS = 10;
         (change)="onFileSelected($event)"
       />
 
+      <!-- Toolbar -->
+      @if (table()) {
+        <div class="sdrf-toolbar">
+          <div class="toolbar-left">
+            <button class="btn btn-secondary" (click)="exportTsv()">
+              Export TSV
+            </button>
+            <button class="btn btn-secondary" (click)="validate()">
+              Validate
+            </button>
+            @if (changeCount() > 0) {
+              <span class="unsaved-indicator" title="{{ changeCount() }} unsaved change(s)">
+                💾 {{ changeCount() }}
+              </span>
+            }
+            <span class="toolbar-divider"></span>
+            <button class="btn btn-secondary" (click)="addRowAtEnd()" title="Add a new row at the end">
+              + Row
+            </button>
+            <button class="btn btn-secondary" (click)="showAddColumnDialog()" title="Add a new column">
+              + Column
+            </button>
+            <span class="toolbar-divider"></span>
+            <button
+              class="btn"
+              [class.btn-active]="showFilterBar()"
+              (click)="toggleFilterBar()"
+              title="Filter rows"
+            >
+              Filter
+            </button>
+            <button
+              class="btn"
+              [class.btn-active]="showStatsPanel()"
+              (click)="toggleStatsPanel()"
+              title="Show column statistics"
+            >
+              Stats
+            </button>
+          </div>
+
+          <div class="toolbar-right">
+            <div class="column-legend">
+              <span class="legend-item source">Sample Accession</span>
+              <span class="legend-item characteristic">Sample Properties</span>
+              <span class="legend-item comment">Data Properties</span>
+              <span class="legend-item factor">Factor Values</span>
+            </div>
+            <span class="table-info">
+              {{ table()!.columns.length }} columns,
+              {{ table()!.sampleCount }} samples
+              @if (visibleRange()) {
+                (showing {{ visibleRange()!.start }}-{{ visibleRange()!.end }})
+              }
+            </span>
+            <button
+              class="btn btn-ai btn-disabled"
+              disabled
+              title="AI Assistant - Coming soon"
+            >
+              AI Assistant
+            </button>
+          </div>
+        </div>
+      }
+
       <!-- Loading indicator -->
       @if (loading()) {
         <div class="loading-overlay">
@@ -512,6 +578,7 @@ const BUFFER_ROWS = 10;
               (batchApply)="onBatchApplyRecommendations($event)"
               (previewRecommendation)="onPreviewRecommendation($event)"
               (applyFix)="onApplyFix($event)"
+              (openChat)="onOpenChat($event)"
             ></sdrf-recommend-panel>
           </div>
         </div>
@@ -1880,6 +1947,19 @@ const BUFFER_ROWS = 10;
       box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.3);
     }
 
+    .btn-ai.btn-disabled {
+      background: #9ca3af;
+      border-color: #9ca3af;
+      color: #f3f4f6;
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
+
+    .btn-ai.btn-disabled:hover {
+      background: #9ca3af;
+      border-color: #9ca3af;
+    }
+
     /* AI Panel Slide-in Container */
     .ai-panel-container {
       position: fixed;
@@ -3105,6 +3185,17 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
       this.jumpToRow();
       this.selectCell(sampleIndex, rec.columnIndex);
     }
+  }
+
+  /**
+   * Handle the Explain button from AI recommendations.
+   * Shows the explanation prompt (future: could send to AI chat).
+   */
+  onOpenChat(prompt: string): void {
+    // For now, show the explanation in an alert
+    // Future: integrate with a chat component
+    console.log('AI Explanation Request:', prompt);
+    alert('AI Explanation:\n\n' + prompt);
   }
 
   private applyRecommendationToTable(rec: SdrfRecommendation): void {
