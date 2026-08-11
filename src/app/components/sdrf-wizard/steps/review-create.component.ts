@@ -1,5 +1,5 @@
 /**
- * Review & Create Component (Step 7)
+ * Review & Create Component (Step 8)
  *
  * Preview generated SDRF and create the table.
  */
@@ -11,14 +11,29 @@ import {
   EventEmitter,
   inject,
   computed,
+  signal,
+  effect,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
 import { WizardStateService } from '../../../core/services/wizard-state.service';
 import { WizardGeneratorService } from '../../../core/services/wizard-generator.service';
+import { SdrfExportService } from '../../../core/services/sdrf-export.service';
+import {
+  PyodideValidatorService,
+  ValidationError,
+} from '../../../core/services/pyodide-validator.service';
 import { SdrfTable, getTableDataMatrix } from '../../../core/models/sdrf-table';
-import { WIZARD_TEMPLATES, LABEL_CONFIGS } from '../../../core/models/wizard';
+import {
+  WIZARD_TEMPLATES,
+  LABEL_CONFIGS,
+  SDRF_SPEC_VERSION,
+  formatSdrfSemver,
+  getSampleTemplateId,
+  resolveRunLabelConfigId,
+  labelConfigDisplayName,
+} from '../../../core/models/wizard';
 
 @Component({
   selector: 'wizard-review-create',
@@ -39,7 +54,7 @@ import { WIZARD_TEMPLATES, LABEL_CONFIGS } from '../../../core/models/wizard';
         <div class="summary-card">
           <div class="summary-icon">{{ templateIcon() }}</div>
           <div class="summary-content">
-            <span class="summary-label">Template</span>
+            <span class="summary-label">Templates</span>
             <span class="summary-value">{{ templateName() }}</span>
           </div>
         </div>
@@ -74,6 +89,26 @@ import { WIZARD_TEMPLATES, LABEL_CONFIGS } from '../../../core/models/wizard';
         <h4>Configuration Summary</h4>
         <div class="config-grid">
           <div class="config-item">
+            <span class="config-label">Sample template:</span>
+            <span class="config-value">{{ sampleTemplateLabel() }}</span>
+          </div>
+          <div class="config-item">
+            <span class="config-label">Technology:</span>
+            <span class="config-value">{{ technologyTemplateLabel() }}</span>
+          </div>
+          <div class="config-item">
+            <span class="config-label">Experiments:</span>
+            <span class="config-value">{{ experimentTemplateLabel() }}</span>
+          </div>
+          <div class="config-item">
+            <span class="config-label">SDRF version:</span>
+            <span class="config-value">{{ sdrfVersion }}</span>
+          </div>
+          <div class="config-item">
+            <span class="config-label">Factors:</span>
+            <span class="config-value">{{ factorSummary() }}</span>
+          </div>
+          <div class="config-item">
             <span class="config-label">Organism:</span>
             <span class="config-value">{{ state().organism?.label || 'Not set' }}</span>
           </div>
@@ -83,19 +118,27 @@ import { WIZARD_TEMPLATES, LABEL_CONFIGS } from '../../../core/models/wizard';
           </div>
           <div class="config-item">
             <span class="config-label">Organism Part:</span>
-            <span class="config-value">{{ state().organismPart?.label || 'Not set' }}</span>
+            <span class="config-value">{{ getOrganismPartLabel() }}</span>
           </div>
           <div class="config-item">
-            <span class="config-label">Label Type:</span>
+            <span class="config-label">Label kits:</span>
             <span class="config-value">{{ labelConfigName() }}</span>
           </div>
           <div class="config-item">
-            <span class="config-label">Fractions:</span>
-            <span class="config-value">{{ state().hasFractions ? state().fractionCount : 'None' }}</span>
+            <span class="config-label">MS Runs:</span>
+            <span class="config-value">{{ state().msRuns.length }}</span>
           </div>
           <div class="config-item">
-            <span class="config-label">Tech. Replicates:</span>
+            <span class="config-label">Planner fractions:</span>
+            <span class="config-value">{{ state().hasFractions ? state().fractionCount : '1' }}</span>
+          </div>
+          <div class="config-item">
+            <span class="config-label">Planner tech reps:</span>
             <span class="config-value">{{ state().technicalReplicates }}</span>
+          </div>
+          <div class="config-item">
+            <span class="config-label">Data files:</span>
+            <span class="config-value">{{ state().dataFiles.length }}</span>
           </div>
           <div class="config-item">
             <span class="config-label">Instrument:</span>
@@ -122,7 +165,7 @@ import { WIZARD_TEMPLATES, LABEL_CONFIGS } from '../../../core/models/wizard';
                 </tr>
               </thead>
               <tbody>
-                @for (row of previewRows(); track $index; let i = $index) {
+                @for (row of previewRows(); track $index) {
                   <tr>
                     @for (cell of row; track $index) {
                       <td>{{ cell }}</td>
@@ -146,7 +189,57 @@ import { WIZARD_TEMPLATES, LABEL_CONFIGS } from '../../../core/models/wizard';
         </div>
       </div>
 
-      <!-- Validation Status -->
+      <!-- Spec validation summary -->
+      @if (needsEditorFollowUp()) {
+        <div class="hint-message">
+          Selected experiment/sample templates may require additional columns
+          (e.g. DIA scan windows, clinical fields). After create, fill them in the editor.
+        </div>
+      }
+
+      <div class="spec-validation" [class.has-errors]="errorCount() > 0" [class.has-warnings]="warningCount() > 0 && errorCount() === 0" [class.ok]="validationDone() && errorCount() === 0 && warningCount() === 0">
+        <div class="spec-validation-header">
+          <strong>SDRF validation</strong>
+          @if (validationRunning()) {
+            <span class="spec-status">Running…</span>
+          } @else if (validationFailed()) {
+            <span class="spec-status">Unavailable (you can still create)</span>
+          } @else if (validationDone()) {
+            <span class="spec-status">
+              {{ errorCount() }} error(s), {{ warningCount() }} warning(s)
+            </span>
+          }
+          <button type="button" class="retry-btn" (click)="runValidation()" [disabled]="validationRunning() || !previewTable()">
+            Re-validate
+          </button>
+        </div>
+        @if (validationFailed()) {
+          <p class="spec-note">{{ validationErrorMessage() }}</p>
+        }
+        @if (validationDone() && displayedIssues().length > 0) {
+          <ul class="issue-list">
+            @for (issue of displayedIssues(); track $index) {
+              <li [class.error]="issue.level === 'error'" [class.warning]="issue.level === 'warning'">
+                <span class="issue-level">{{ issue.level }}</span>
+                {{ issue.message }}
+                @if (issue.column) {
+                  <span class="issue-meta">({{ issue.column }})</span>
+                }
+              </li>
+            }
+          </ul>
+          @if (truncatedIssues()) {
+            <p class="spec-note">Showing first {{ displayedIssues().length }} issues.</p>
+          }
+        }
+        @if (validationDone() && errorCount() > 0) {
+          <p class="spec-note warn">
+            Errors were found. You can still create the table and fix them in the editor.
+          </p>
+        }
+      </div>
+
+      <!-- Wizard field completion status -->
       <div class="validation-status" [class.valid]="wizardState.isAllValid()" [class.invalid]="!wizardState.isAllValid()">
         @if (wizardState.isAllValid()) {
           <span class="status-icon">&#10003;</span>
@@ -208,11 +301,13 @@ import { WIZARD_TEMPLATES, LABEL_CONFIGS } from '../../../core/models/wizard';
       justify-content: center;
       font-size: 18px;
       font-weight: 600;
+      flex-shrink: 0;
     }
 
     .summary-content {
       display: flex;
       flex-direction: column;
+      min-width: 0;
     }
 
     .summary-label {
@@ -221,9 +316,12 @@ import { WIZARD_TEMPLATES, LABEL_CONFIGS } from '../../../core/models/wizard';
     }
 
     .summary-value {
-      font-size: 16px;
+      font-size: 14px;
       font-weight: 600;
       color: #1f2937;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .config-summary {
@@ -278,7 +376,7 @@ import { WIZARD_TEMPLATES, LABEL_CONFIGS } from '../../../core/models/wizard';
     .table-preview-container {
       border: 1px solid #e5e7eb;
       border-radius: 8px;
-      overflow: hidden;
+      overflow: auto;
     }
 
     .preview-table {
@@ -321,6 +419,102 @@ import { WIZARD_TEMPLATES, LABEL_CONFIGS } from '../../../core/models/wizard';
       padding: 40px;
       text-align: center;
       color: #6b7280;
+    }
+
+    .hint-message {
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #1e40af;
+    }
+
+    .spec-validation {
+      margin-bottom: 16px;
+      padding: 14px 16px;
+      border-radius: 10px;
+      border: 1px solid #e5e7eb;
+      background: #f9fafb;
+    }
+
+    .spec-validation.ok {
+      background: #ecfdf5;
+      border-color: #a7f3d0;
+    }
+
+    .spec-validation.has-warnings {
+      background: #fffbeb;
+      border-color: #fde68a;
+    }
+
+    .spec-validation.has-errors {
+      background: #fef2f2;
+      border-color: #fecaca;
+    }
+
+    .spec-validation-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .spec-status {
+      font-size: 13px;
+      color: #4b5563;
+    }
+
+    .retry-btn {
+      margin-left: auto;
+      border: 1px solid #d1d5db;
+      background: white;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .retry-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .issue-list {
+      margin: 10px 0 0;
+      padding-left: 18px;
+      font-size: 12px;
+      color: #374151;
+    }
+
+    .issue-list .error {
+      color: #991b1b;
+    }
+
+    .issue-list .warning {
+      color: #92400e;
+    }
+
+    .issue-level {
+      font-weight: 700;
+      text-transform: uppercase;
+      margin-right: 6px;
+      font-size: 10px;
+    }
+
+    .issue-meta {
+      color: #6b7280;
+    }
+
+    .spec-note {
+      margin: 8px 0 0;
+      font-size: 12px;
+      color: #6b7280;
+    }
+
+    .spec-note.warn {
+      color: #991b1b;
     }
 
     .validation-status {
@@ -380,8 +574,19 @@ export class ReviewCreateComponent {
 
   readonly wizardState = inject(WizardStateService);
   private readonly generator = inject(WizardGeneratorService);
+  private readonly exporter = new SdrfExportService();
+  private readonly validator = inject(PyodideValidatorService);
 
   readonly state = this.wizardState.state;
+  readonly sdrfVersion = formatSdrfSemver(SDRF_SPEC_VERSION);
+
+  readonly validationRunning = signal(false);
+  readonly validationDone = signal(false);
+  readonly validationFailed = signal(false);
+  readonly validationErrorMessage = signal('');
+  readonly validationIssues = signal<ValidationError[]>([]);
+
+  private lastValidatedKey = '';
 
   readonly previewTable = computed(() => {
     try {
@@ -395,37 +600,152 @@ export class ReviewCreateComponent {
     const table = this.previewTable();
     if (!table) return [];
     const matrix = getTableDataMatrix(table);
-    return matrix.slice(0, 5); // Show first 5 rows
+    return matrix.slice(0, 5);
+  });
+
+  readonly errorCount = computed(() =>
+    this.validationIssues().filter(i => i.level === 'error').length
+  );
+
+  readonly warningCount = computed(() =>
+    this.validationIssues().filter(i => i.level === 'warning').length
+  );
+
+  readonly displayedIssues = computed(() => this.validationIssues().slice(0, 8));
+
+  readonly truncatedIssues = computed(() => this.validationIssues().length > 8);
+
+  readonly sampleTemplateLabel = computed(() => {
+    const id = getSampleTemplateId(this.state());
+    return WIZARD_TEMPLATES.find(t => t.id === id)?.name || id || 'Not selected';
+  });
+
+  readonly technologyTemplateLabel = computed(() => {
+    const id = this.state().technologyTemplate;
+    return WIZARD_TEMPLATES.find(t => t.id === id)?.name || id || 'Not selected';
+  });
+
+  readonly experimentTemplateLabel = computed(() => {
+    const ids = this.state().experimentTemplates || [];
+    if (ids.length === 0) return 'None';
+    return ids.map(id => WIZARD_TEMPLATES.find(t => t.id === id)?.name || id).join(', ');
+  });
+
+  readonly needsEditorFollowUp = computed(() => {
+    const sample = getSampleTemplateId(this.state());
+    const experiments = this.state().experimentTemplates || [];
+    const advancedSample = ['clinical-metadata', 'oncology-metadata', 'metaproteomics', 'human-gut', 'soil', 'water'].includes(sample || '');
+    const advancedExp = experiments.some(e =>
+      ['dia-acquisition', 'single-cell', 'immunopeptidomics', 'crosslinking', 'lc-ms-metabolomics', 'gc-ms-metabolomics'].includes(e)
+    );
+    return advancedSample || advancedExp;
   });
 
   readonly templateName = computed(() => {
-    const template = this.state().template;
-    const found = WIZARD_TEMPLATES.find(t => t.id === template);
-    return found?.name || 'Not selected';
+    const parts = [this.sampleTemplateLabel(), this.technologyTemplateLabel()];
+    const exp = this.experimentTemplateLabel();
+    if (exp !== 'None') parts.push(exp);
+    return parts.join(' + ');
   });
 
   readonly templateIcon = computed(() => {
-    const template = this.state().template;
+    const template = getSampleTemplateId(this.state());
     switch (template) {
       case 'human': return '\ud83e\uddd1';
-      case 'cell-line': return '\ud83e\uddeb';
-      case 'vertebrate': return '\ud83d\udc2d';
-      case 'other': return '\ud83e\uddec';
+      case 'cell-line':
+      case 'cell-lines': return '\ud83e\uddeb';
+      case 'vertebrate':
+      case 'vertebrates': return '\ud83d\udc2d';
+      case 'plants': return '\ud83c\udf31';
       default: return '?';
     }
   });
 
   readonly labelConfigName = computed(() => {
-    const configId = this.state().labelConfigId;
-    const found = LABEL_CONFIGS.find(c => c.id === configId);
-    return found?.name || 'Unknown';
+    const s = this.state();
+    const runs = s.msRuns || [];
+    if (runs.length === 0) {
+      return LABEL_CONFIGS.find(c => c.id === s.labelConfigId)?.name || 'Unknown';
+    }
+    const names = runs.map(r => {
+      const id = resolveRunLabelConfigId(r, s);
+      return labelConfigDisplayName(id);
+    });
+    return [...new Set(names)].join(' · ');
   });
+
+  readonly factorSummary = computed(() => {
+    const factors = this.state().factors.filter(f => f.enabled && f.name.trim());
+    if (factors.length === 0) return 'None';
+    return factors.map(f => `factor value[${f.name}]`).join(', ');
+  });
+
+  constructor() {
+    effect(() => {
+      const table = this.previewTable();
+      if (!table || !this.wizardState.isAllValid()) return;
+      const key = table.columns.map(c => c.name).join('|') + ':' + table.sampleCount;
+      if (key !== this.lastValidatedKey) {
+        this.lastValidatedKey = key;
+        void this.runValidation();
+      }
+    });
+  }
+
+  async runValidation(): Promise<void> {
+    const table = this.previewTable();
+    if (!table || this.validationRunning()) return;
+
+    this.validationRunning.set(true);
+    this.validationFailed.set(false);
+    this.validationErrorMessage.set('');
+
+    try {
+      const tsv = this.exporter.exportToTsv(table);
+      const sampleTemplate = getSampleTemplateId(this.state());
+      const templates = [
+        sampleTemplate,
+        this.state().technologyTemplate,
+        ...this.state().experimentTemplates,
+      ].filter((t): t is string => !!t);
+
+      const uniqueTemplates = [...new Set(templates)];
+      if (uniqueTemplates.length === 0) {
+        uniqueTemplates.push('ms-proteomics');
+      }
+
+      const errors = await this.validator.validate(tsv, uniqueTemplates, {
+        skipOntology: true,
+        mode: 'api',
+        allowApiFallback: false,
+      });
+
+      this.validationIssues.set(errors);
+      this.validationDone.set(true);
+    } catch (err) {
+      this.validationFailed.set(true);
+      this.validationDone.set(false);
+      this.validationIssues.set([]);
+      this.validationErrorMessage.set(
+        err instanceof Error ? err.message : 'Validation service unavailable'
+      );
+    } finally {
+      this.validationRunning.set(false);
+    }
+  }
 
   getDiseaseLabel(): string {
     const disease = this.state().disease;
     if (!disease) return 'Not set';
     if (typeof disease === 'string') return disease;
     return disease.label;
+  }
+
+  getOrganismPartLabel(): string {
+    const part = this.state().organismPart;
+    if (!part) return 'Not set';
+    if (typeof part === 'string') return part;
+    return part.label;
   }
 
   onCreate(): void {

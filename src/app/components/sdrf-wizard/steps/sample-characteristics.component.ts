@@ -1,7 +1,7 @@
 /**
  * Sample Characteristics Component (Step 2)
  *
- * Organism, disease, organism part, and template-specific fields.
+ * Multi-value candidate lists per characteristics column (quick picks + search).
  */
 
 import {
@@ -10,1027 +10,399 @@ import {
   inject,
   signal,
   computed,
+  OnInit,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
 import { WizardStateService } from '../../../core/services/wizard-state.service';
-import { OntologyTerm } from '../../../core/models/wizard';
-import { olsService, type DirectOlsService } from '../../../core/services/ols.service';
+import {
+  OntologyTerm,
+  WizardCharacteristicColumnMeta,
+  CharacteristicChoice,
+  getSpecialtyCharacteristicKey,
+  getQuickPickSuggestions,
+  parseCharacteristicInnerName,
+  isWizardSkippedCharacteristic,
+} from '../../../core/models/wizard';
+import { olsService } from '../../../core/services/ols.service';
+import { OntologySuggestion } from '../../../core/models/ontology';
+import { FactorValuesComponent } from './factor-values.component';
+
+function suggestionToTerm(s: OntologySuggestion): OntologyTerm {
+  return {
+    id: s.id,
+    label: s.label,
+    iri: s.iri,
+    ontologyPrefix: s.ontologyPrefix,
+    ontology: s.ontologyPrefix,
+  };
+}
 
 @Component({
   selector: 'wizard-sample-characteristics',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, FactorValuesComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="step-container">
       <div class="step-header">
         <h3>Sample Characteristics</h3>
         <p class="step-description">
-          Define the biological characteristics shared by all your samples.
-          These values will be used as <strong>defaults</strong> for cells not specified individually.
-          Sample-specific overrides can be set in the next step.
+          Add one or more values for each characteristics column, then define study
+          factors and their group labels. A single characteristic value is applied to
+          all samples; multiple values become dropdown choices on the next step.
         </p>
       </div>
 
-      <!-- Info Banner -->
+      @if (loading()) {
+        <div class="status">Loading template characteristics…</div>
+      } @else if (loadError()) {
+        <div class="status error">{{ loadError() }}</div>
+      }
+
       <div class="info-banner">
         <span class="info-icon">i</span>
         <div class="info-content">
-          <strong>SDRF Characteristics Columns</strong>
+          <strong>Multi-value candidates</strong>
           <p>
-            These fields map to <code>characteristics[...]</code> columns in your SDRF file.
-            Values should use controlled vocabulary terms from ontologies (NCBI Taxonomy, MONDO, UBERON).
-            <a href="https://github.com/bigbio/proteomics-metadata-standard/tree/master/sdrf-proteomics" target="_blank" rel="noopener">Learn more about SDRF-Proteomics</a>
+            Use quick chips or search to build a candidate list. Required columns need at least
+            one value to continue.
           </p>
         </div>
       </div>
 
-      <!-- Organism -->
-      <div class="form-section">
-        <label class="form-label">
-          Organism
-          <span class="required">*</span>
-          <button type="button" class="help-btn" (click)="toggleHelp('organism')" title="Learn more">?</button>
-          <span class="help-text">Species of your samples (e.g., Homo sapiens, Mus musculus)</span>
-        </label>
-        @if (activeHelp() === 'organism') {
-          <div class="help-tooltip">
-            <strong>characteristics[organism]</strong>
-            <p>The taxonomic species from which the sample originates. Uses <strong>NCBI Taxonomy</strong> ontology.</p>
-            <div class="help-details">
-              <div class="help-row"><span class="help-key">Ontology:</span> NCBITaxon</div>
-              <div class="help-row"><span class="help-key">Format:</span> Species name (e.g., "Homo sapiens")</div>
-              <div class="help-row"><span class="help-key">Requirement:</span> <span class="badge-required">Required</span></div>
-            </div>
-            <div class="help-examples">
-              <strong>Examples:</strong> Homo sapiens, Mus musculus, Rattus norvegicus, Saccharomyces cerevisiae
-            </div>
-          </div>
+      <section class="column-section">
+        <h4 class="section-title">
+          <span class="badge required">Required</span>
+          <span class="count">{{ requiredColumns().length }}</span>
+        </h4>
+        @for (col of requiredColumns(); track col.name) {
+          <ng-container *ngTemplateOutlet="fieldTpl; context: { $implicit: col, required: true }" />
         }
-        <div class="autocomplete-container">
-          <input
-            type="text"
-            class="form-input"
-            [ngModel]="organismSearch()"
-            (ngModelChange)="searchOrganism($event)"
-            (focus)="showOrganismResults.set(true)"
-            placeholder="Search for organism..."
-          />
-          @if (showOrganismResults() && organismResults().length > 0) {
-            <div class="autocomplete-dropdown">
-              @for (result of organismResults(); track result.id) {
-                <button
-                  class="autocomplete-option"
-                  (click)="selectOrganism(result)"
-                >
-                  <span class="option-label">{{ result.label }}</span>
-                  <span class="option-id">{{ result.id }}</span>
-                </button>
-              }
-            </div>
-          }
-        </div>
-        @if (state().organism) {
-          <div class="selected-value">
-            <span class="selected-label">{{ state().organism!.label }}</span>
-            <span class="selected-id">{{ state().organism!.id }}</span>
-            <button class="btn-clear" (click)="clearOrganism()">&times;</button>
-          </div>
-        }
-        <div class="quick-select">
-          <span class="quick-label">Common:</span>
-          <button class="quick-btn" (click)="selectQuickOrganism('Homo sapiens', 'NCBITaxon:9606')">Homo sapiens</button>
-          <button class="quick-btn" (click)="selectQuickOrganism('Mus musculus', 'NCBITaxon:10090')">Mus musculus</button>
-          <button class="quick-btn" (click)="selectQuickOrganism('Rattus norvegicus', 'NCBITaxon:10116')">Rattus norvegicus</button>
-        </div>
-      </div>
+      </section>
 
-      <!-- Disease -->
-      <div class="form-section">
-        <label class="form-label">
-          Disease
-          <span class="required">*</span>
-          <button type="button" class="help-btn" (click)="toggleHelp('disease')" title="Learn more">?</button>
-          <span class="help-text">Disease being studied or 'normal' for healthy samples</span>
-        </label>
-        @if (activeHelp() === 'disease') {
-          <div class="help-tooltip">
-            <strong>characteristics[disease]</strong>
-            <p>The disease or condition being studied. For healthy/control samples, use <strong>"normal"</strong> (PATO:0000461).</p>
-            <div class="help-details">
-              <div class="help-row"><span class="help-key">Ontologies:</span> MONDO, EFO, DOID, PATO</div>
-              <div class="help-row"><span class="help-key">Format:</span> Disease name or "normal"</div>
-              <div class="help-row"><span class="help-key">Requirement:</span> <span class="badge-required">Required</span></div>
-            </div>
-            <div class="help-examples">
-              <strong>Examples:</strong> normal, breast cancer, Alzheimer disease, diabetes mellitus
-            </div>
-          </div>
-        }
-        <div class="autocomplete-container">
-          <input
-            type="text"
-            class="form-input"
-            [ngModel]="diseaseSearch()"
-            (ngModelChange)="searchDisease($event)"
-            (focus)="showDiseaseResults.set(true)"
-            placeholder="Search for disease or type 'normal'..."
-          />
-          @if (showDiseaseResults() && diseaseResults().length > 0) {
-            <div class="autocomplete-dropdown">
-              @for (result of diseaseResults(); track result.id) {
-                <button
-                  class="autocomplete-option"
-                  (click)="selectDisease(result)"
-                >
-                  <span class="option-label">{{ result.label }}</span>
-                  <span class="option-id">{{ result.id }}</span>
-                </button>
-              }
-            </div>
-          }
-        </div>
-        @if (state().disease) {
-          <div class="selected-value">
-            @if (isDiseaseString()) {
-              <span class="selected-label">{{ state().disease }}</span>
-            } @else {
-              <span class="selected-label">{{ getDiseaseLabel() }}</span>
-              <span class="selected-id">{{ getDiseaseId() }}</span>
+      <section class="column-section">
+        <button type="button" class="section-toggle" (click)="showRecommended.set(!showRecommended())">
+          <span class="badge recommended">Recommended</span>
+          <span class="count">{{ recommendedColumns().length }}</span>
+          <span class="chevron">{{ showRecommended() ? '−' : '+' }}</span>
+        </button>
+        @if (showRecommended()) {
+          @if (recommendedColumns().length === 0) {
+            <div class="empty">No recommended characteristics for this selection.</div>
+          } @else {
+            @for (col of recommendedColumns(); track col.name) {
+              <ng-container *ngTemplateOutlet="fieldTpl; context: { $implicit: col, required: false }" />
             }
-            <button class="btn-clear" (click)="clearDisease()">&times;</button>
-          </div>
-        }
-        <div class="quick-select">
-          <span class="quick-label">Common:</span>
-          <button class="quick-btn" (click)="selectQuickDisease('normal')">normal</button>
-          <button class="quick-btn" (click)="selectQuickDiseaseOntology('breast cancer', 'MONDO:0007254')">breast cancer</button>
-          <button class="quick-btn" (click)="selectQuickDiseaseOntology('colorectal cancer', 'MONDO:0005575')">colorectal cancer</button>
-          <button class="quick-btn quick-btn-special" (click)="selectSpecialDisease('not applicable')">not applicable</button>
-          <button class="quick-btn quick-btn-special" (click)="selectSpecialDisease('not available')">not available</button>
-        </div>
-      </div>
-
-      <!-- Organism Part -->
-      <div class="form-section">
-        <label class="form-label">
-          Organism Part / Tissue
-          <span class="required">*</span>
-          <button type="button" class="help-btn" (click)="toggleHelp('organismPart')" title="Learn more">?</button>
-          <span class="help-text">Tissue or body part (e.g., liver, blood plasma, whole organism)</span>
-        </label>
-        @if (activeHelp() === 'organismPart') {
-          <div class="help-tooltip">
-            <strong>characteristics[organism part]</strong>
-            <p>The anatomical tissue or organ from which the sample was derived. For cell lines or whole organisms, use appropriate terms.</p>
-            <div class="help-details">
-              <div class="help-row"><span class="help-key">Ontologies:</span> UBERON, BTO (BRENDA Tissue)</div>
-              <div class="help-row"><span class="help-key">Format:</span> Anatomical term</div>
-              <div class="help-row"><span class="help-key">Special:</span> "not applicable", "not available" allowed</div>
-              <div class="help-row"><span class="help-key">Requirement:</span> <span class="badge-required">Required</span></div>
-            </div>
-            <div class="help-examples">
-              <strong>Examples:</strong> liver, blood plasma, heart, brain, whole organism, not applicable, not available
-            </div>
-          </div>
-        }
-        <div class="autocomplete-container">
-          <input
-            type="text"
-            class="form-input"
-            [ngModel]="organismPartSearch()"
-            (ngModelChange)="searchOrganismPart($event)"
-            (focus)="showOrganismPartResults.set(true)"
-            placeholder="Search for tissue/organ..."
-          />
-          @if (showOrganismPartResults() && organismPartResults().length > 0) {
-            <div class="autocomplete-dropdown">
-              @for (result of organismPartResults(); track result.id) {
-                <button
-                  class="autocomplete-option"
-                  (click)="selectOrganismPart(result)"
-                >
-                  <span class="option-label">{{ result.label }}</span>
-                  <span class="option-id">{{ result.id }}</span>
-                </button>
-              }
-            </div>
           }
-        </div>
-        @if (state().organismPart) {
-          <div class="selected-value">
-            <span class="selected-label">{{ state().organismPart!.label }}</span>
-            <span class="selected-id">{{ state().organismPart!.id }}</span>
-            <button class="btn-clear" (click)="clearOrganismPart()">&times;</button>
-          </div>
         }
-        <div class="quick-select">
-          <span class="quick-label">Common:</span>
-          <button class="quick-btn" (click)="selectQuickOrganismPart('liver', 'UBERON:0002107')">liver</button>
-          <button class="quick-btn" (click)="selectQuickOrganismPart('blood plasma', 'UBERON:0001969')">blood plasma</button>
-          <button class="quick-btn" (click)="selectQuickOrganismPart('whole organism', 'UBERON:0000468')">whole organism</button>
-          <button class="quick-btn quick-btn-special" (click)="selectSpecialOrganismPart('not applicable')">not applicable</button>
-          <button class="quick-btn quick-btn-special" (click)="selectSpecialOrganismPart('not available')">not available</button>
-        </div>
-      </div>
+      </section>
 
-      <!-- Template-specific fields -->
-      @if (wizardState.isHumanTemplate()) {
-        <div class="template-fields">
-          <h4>Human-specific Fields</h4>
-          <p class="template-fields-desc">
-            Required for human samples per SDRF-Proteomics specification. Values like "anonymized" or "pooled" are accepted when applicable.
-          </p>
+      <wizard-factor-values />
 
-          <div class="form-row">
-            <div class="form-section">
-              <label class="form-label">
-                Default Sex
-                <button type="button" class="help-btn" (click)="toggleHelp('sex')" title="Learn more">?</button>
-                <span class="help-text">Biological sex (can be overridden per sample)</span>
-              </label>
-              @if (activeHelp() === 'sex') {
-                <div class="help-tooltip">
-                  <strong>characteristics[sex]</strong>
-                  <p>Biological sex of the sample donor.</p>
-                  <div class="help-details">
-                    <div class="help-row"><span class="help-key">Allowed values:</span> male, female, intersex, not available, anonymized, pooled</div>
-                    <div class="help-row"><span class="help-key">Requirement:</span> <span class="badge-recommended">Recommended</span></div>
-                  </div>
-                </div>
-              }
-              <select
-                class="form-select"
-                [ngModel]="state().defaultSex"
-                (ngModelChange)="wizardState.setDefaultSex($event)"
-              >
-                <option [ngValue]="null">-- Select --</option>
-                <option value="male">male</option>
-                <option value="female">female</option>
-                <option value="not available">not available</option>
-              </select>
-            </div>
-
-            <div class="form-section">
-              <label class="form-label">
-                Default Age
-                <button type="button" class="help-btn" (click)="toggleHelp('age')" title="Learn more">?</button>
-                <span class="help-text">Format: 25Y (years), 6M (months), or not available</span>
-              </label>
-              @if (activeHelp() === 'age') {
-                <div class="help-tooltip">
-                  <strong>characteristics[age]</strong>
-                  <p>Age of the sample donor at collection time. Use standard age format.</p>
-                  <div class="help-details">
-                    <div class="help-row"><span class="help-key">Format:</span> Number + unit (Y=years, M=months, D=days)</div>
-                    <div class="help-row"><span class="help-key">Ranges:</span> 40Y-50Y for age ranges</div>
-                    <div class="help-row"><span class="help-key">Special:</span> not available, anonymized, pooled</div>
-                    <div class="help-row"><span class="help-key">Requirement:</span> <span class="badge-recommended">Recommended</span></div>
-                  </div>
-                  <div class="help-examples">
-                    <strong>Examples:</strong> 45Y, 6M, 30Y6M, 40Y-50Y, not available
-                  </div>
-                </div>
-              }
-              <input
-                type="text"
-                class="form-input"
-                [ngModel]="state().defaultAge"
-                (ngModelChange)="wizardState.setDefaultAge($event)"
-                placeholder="e.g., 45Y or not available"
-              />
-            </div>
-          </div>
-        </div>
-      }
-
-      @if (wizardState.isCellLineTemplate()) {
-        <div class="template-fields">
-          <h4>Cell Line Fields</h4>
-
-          <div class="form-section">
-            <label class="form-label">
-              Cell Line Name
-              <span class="help-text">Name of the cell line (e.g., HeLa, HEK293, MCF-7)</span>
-            </label>
-            <input
-              type="text"
-              class="form-input"
-              [ngModel]="state().defaultCellLine"
-              (ngModelChange)="wizardState.setDefaultCellLine($event)"
-              placeholder="e.g., HeLa"
-            />
-            <div class="quick-select">
-              <span class="quick-label">Common:</span>
-              <button class="quick-btn" (click)="wizardState.setDefaultCellLine('HeLa')">HeLa</button>
-              <button class="quick-btn" (click)="wizardState.setDefaultCellLine('HEK293')">HEK293</button>
-              <button class="quick-btn" (click)="wizardState.setDefaultCellLine('MCF-7')">MCF-7</button>
-              <button class="quick-btn" (click)="wizardState.setDefaultCellLine('A549')">A549</button>
-            </div>
-          </div>
-        </div>
-      }
-
-      @if (wizardState.needsStrainAndDevelopmentalStage()) {
-        <div class="template-fields">
-          <h4>Organism-specific Fields</h4>
-
-          <div class="form-row">
-            <div class="form-section">
-              <label class="form-label">
-                Strain / Breed
-                <span class="help-text">e.g., C57BL/6 (mouse), Col-0 (Arabidopsis), Oregon-R (Drosophila)</span>
-              </label>
-              <input
-                type="text"
-                class="form-input"
-                [ngModel]="state().strainBreed"
-                (ngModelChange)="wizardState.setStrainBreed($event)"
-                placeholder="e.g., C57BL/6"
-              />
-            </div>
-
-            <div class="form-section">
-              <label class="form-label">
-                Developmental Stage
-                <span class="help-text">Life stage (e.g., adult, embryonic day 14)</span>
-              </label>
-              <input
-                type="text"
-                class="form-input"
-                [ngModel]="state().developmentalStage"
-                (ngModelChange)="wizardState.setDevelopmentalStage($event)"
-                placeholder="e.g., adult"
-              />
-            </div>
-          </div>
-        </div>
-      }
-
-      <!-- Validation Message -->
       @if (!wizardState.isStep2Valid()) {
         <div class="validation-message">
           <span class="warning-icon">!</span>
-          Please fill in organism, disease, and organism part to continue.
+          <div>
+            Add at least one candidate for each required characteristic, and define
+            at least one study factor with candidate values.
+          </div>
         </div>
       }
     </div>
+
+    <ng-template #fieldTpl let-col let-required="required">
+      <div class="form-section" [attr.data-column]="col.name">
+        <label class="form-label">
+          {{ columnTitle(col) }}
+          @if (required) { <span class="req">*</span> }
+          <span class="help-text">{{ col.description || hintFor(col) }}</span>
+        </label>
+
+        @if (quickPicks(col).length) {
+          <div class="quick-row">
+            @for (pick of quickPicks(col); track pick) {
+              <button
+                type="button"
+                class="quick-btn"
+                [class.active]="hasChoice(col.name, pick)"
+                (click)="toggleQuickPick(col.name, pick)"
+              >{{ pick }}</button>
+            }
+          </div>
+        }
+
+        <div class="autocomplete-container">
+          <input
+            type="text"
+            class="form-input"
+            [ngModel]="searchQuery(col.name)"
+            (ngModelChange)="onSearch(col, $event)"
+            (keydown.enter)="addFreeText(col); $event.preventDefault()"
+            (focus)="activeColumn.set(col.name)"
+            [placeholder]="searchPlaceholder(col)"
+          />
+          <button type="button" class="add-btn" (click)="addFreeText(col)" title="Add value">+</button>
+          @if (activeColumn() === col.name && searchResults().length > 0) {
+            <div class="autocomplete-dropdown">
+              @for (result of searchResults(); track result.id) {
+                <button type="button" class="autocomplete-option" (click)="selectOntology(col.name, result)">
+                  <span class="option-label">{{ result.label }}</span>
+                  <span class="option-id">{{ result.id }}</span>
+                </button>
+              }
+            </div>
+          }
+        </div>
+
+        <div class="choice-chips">
+          @for (choice of choices(col.name); track choice.value) {
+            <span class="selected-chip">
+              {{ choice.value }}
+              <button
+                type="button"
+                class="chip-clear"
+                (click)="wizardState.removeCharacteristicChoice(col.name, choice.value)"
+              >×</button>
+            </span>
+          } @empty {
+            <span class="empty-hint">No candidates yet</span>
+          }
+        </div>
+      </div>
+    </ng-template>
   `,
   styles: [`
-    .step-container {
-      max-width: 700px;
-    }
-
-    .step-header {
-      margin-bottom: 24px;
-    }
-
-    .step-header h3 {
-      margin: 0 0 8px 0;
-      font-size: 18px;
-      font-weight: 600;
-      color: #1f2937;
-    }
-
-    .step-description {
-      margin: 0;
-      color: #6b7280;
-      font-size: 14px;
-    }
-
-    .form-section {
-      margin-bottom: 24px;
-    }
-
-    .form-label {
-      display: block;
-      font-size: 14px;
-      font-weight: 500;
-      color: #374151;
-      margin-bottom: 8px;
-    }
-
-    .required {
-      color: #ef4444;
-      margin-left: 4px;
-    }
-
-    .help-text {
-      display: block;
-      font-size: 12px;
-      font-weight: normal;
-      color: #6b7280;
-      margin-top: 4px;
-    }
-
-    .form-input,
-    .form-select {
-      width: 100%;
-      padding: 10px 12px;
-      border: 1px solid #d1d5db;
-      border-radius: 8px;
-      font-size: 14px;
-      transition: border-color 0.15s, box-shadow 0.15s;
-    }
-
-    .form-input:focus,
-    .form-select:focus {
-      outline: none;
-      border-color: #3b82f6;
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-    }
-
-    .autocomplete-container {
-      position: relative;
-    }
-
-    .autocomplete-dropdown {
-      position: absolute;
-      top: 100%;
-      left: 0;
-      right: 0;
-      background: white;
-      border: 1px solid #d1d5db;
-      border-radius: 8px;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
-      max-height: 200px;
-      overflow-y: auto;
-      z-index: 100;
-      margin-top: 4px;
-    }
-
-    .autocomplete-option {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      width: 100%;
-      padding: 10px 12px;
-      border: none;
-      background: none;
-      text-align: left;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-
-    .autocomplete-option:hover {
-      background: #f3f4f6;
-    }
-
-    .option-label {
-      font-size: 14px;
-      color: #1f2937;
-    }
-
-    .option-id {
-      font-size: 12px;
-      color: #6b7280;
-    }
-
-    .selected-value {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 8px;
-      padding: 8px 12px;
-      background: #eff6ff;
-      border: 1px solid #bfdbfe;
-      border-radius: 6px;
-    }
-
-    .selected-label {
-      font-size: 14px;
-      font-weight: 500;
-      color: #1e40af;
-    }
-
-    .selected-id {
-      font-size: 12px;
-      color: #3b82f6;
-    }
-
-    .btn-clear {
-      margin-left: auto;
-      background: none;
-      border: none;
-      font-size: 18px;
-      color: #6b7280;
-      cursor: pointer;
-      padding: 0 4px;
-    }
-
-    .btn-clear:hover {
-      color: #ef4444;
-    }
-
-    .quick-select {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-top: 8px;
-      flex-wrap: wrap;
-    }
-
-    .quick-label {
-      font-size: 12px;
-      color: #6b7280;
-    }
-
-    .quick-btn {
-      padding: 4px 10px;
-      background: #f3f4f6;
-      border: 1px solid #e5e7eb;
-      border-radius: 4px;
-      font-size: 12px;
-      color: #374151;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-
-    .quick-btn:hover {
-      background: #e5e7eb;
-      border-color: #d1d5db;
-    }
-
-    .quick-btn-special {
-      background: #fef3c7;
-      border-color: #fcd34d;
-      color: #92400e;
-    }
-
-    .quick-btn-special:hover {
-      background: #fde68a;
-      border-color: #f59e0b;
-    }
-
-    .template-fields {
-      margin-top: 32px;
-      padding-top: 24px;
-      border-top: 1px solid #e5e7eb;
-    }
-
-    .template-fields h4 {
-      margin: 0 0 8px 0;
-      font-size: 15px;
-      font-weight: 600;
-      color: #374151;
-    }
-
-    .template-fields-desc {
-      margin: 0 0 16px 0;
-      font-size: 13px;
-      color: #6b7280;
-    }
-
-    .form-row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-    }
-
-    .validation-message {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 12px 16px;
-      background: #fef3c7;
-      border: 1px solid #fcd34d;
-      border-radius: 8px;
-      font-size: 13px;
-      color: #92400e;
-      margin-top: 24px;
-    }
-
-    .warning-icon {
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      background: #f59e0b;
-      color: white;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 12px;
-      font-weight: bold;
-    }
-
-    /* Info Banner */
+    .step-container { max-width: 720px; }
+    .step-header { margin-bottom: 16px; }
+    .step-header h3 { margin: 0 0 6px; font-size: 18px; font-weight: 600; color: #111827; }
+    .step-description { margin: 0; font-size: 14px; color: #6b7280; }
+    .status { padding: 12px 14px; font-size: 13px; color: #64748b; }
+    .status.error { color: #b91c1c; }
     .info-banner {
-      display: flex;
-      gap: 12px;
-      padding: 14px 16px;
-      background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%);
-      border: 1px solid #bfdbfe;
-      border-radius: 10px;
-      margin-bottom: 24px;
+      display: flex; gap: 10px; padding: 12px 14px; margin-bottom: 16px;
+      background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px;
     }
-
     .info-icon {
-      width: 22px;
-      height: 22px;
-      border-radius: 50%;
-      background: #3b82f6;
-      color: white;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 13px;
-      font-weight: 600;
-      flex-shrink: 0;
+      width: 20px; height: 20px; border-radius: 50%; background: #3b82f6; color: #fff;
+      display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0;
     }
-
-    .info-content {
-      flex: 1;
+    .info-content strong { display: block; font-size: 13px; color: #1e40af; margin-bottom: 2px; }
+    .info-content p { margin: 0; font-size: 12px; color: #4b5563; }
+    .column-section { margin-bottom: 18px; }
+    .section-title, .section-toggle {
+      display: flex; align-items: center; gap: 8px; margin: 0 0 10px;
+      font-size: 13px; font-weight: 600; color: #374151;
     }
-
-    .info-content strong {
-      display: block;
-      font-size: 14px;
-      color: #1e40af;
-      margin-bottom: 4px;
+    .section-toggle {
+      width: 100%; border: 1px solid #e5e7eb; background: #f9fafb; border-radius: 8px;
+      padding: 10px 12px; cursor: pointer; text-align: left;
     }
-
-    .info-content p {
-      margin: 0;
-      font-size: 13px;
-      color: #4b5563;
-      line-height: 1.5;
+    .chevron { margin-left: auto; color: #9ca3af; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10px;
+      text-transform: uppercase; letter-spacing: 0.04em;
     }
-
-    .info-content code {
-      background: #dbeafe;
-      padding: 1px 5px;
-      border-radius: 3px;
-      font-size: 12px;
-      color: #1e40af;
+    .badge.required { background: #fee2e2; color: #991b1b; }
+    .badge.recommended { background: #ffedd5; color: #9a3412; }
+    .count { color: #9ca3af; font-weight: 500; }
+    .form-section { margin-bottom: 14px; padding: 12px; border: 1px solid #f3f4f6; border-radius: 10px; background: #fff; }
+    .form-label { display: block; font-size: 13px; font-weight: 600; color: #111827; margin-bottom: 6px; }
+    .help-text { display: block; font-size: 12px; font-weight: 400; color: #6b7280; margin-top: 2px; }
+    .req { color: #ef4444; }
+    .autocomplete-container { position: relative; display: flex; gap: 8px; }
+    .form-input {
+      flex: 1; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px;
+      font-size: 14px; box-sizing: border-box;
     }
-
-    .info-content a {
-      color: #2563eb;
-      text-decoration: none;
+    .add-btn {
+      width: 40px; border: 1px solid #d1d5db; border-radius: 8px; background: #f9fafb;
+      font-size: 18px; cursor: pointer; color: #374151;
     }
-
-    .info-content a:hover {
-      text-decoration: underline;
+    .autocomplete-dropdown {
+      position: absolute; z-index: 20; left: 0; right: 48px; top: 100%;
+      background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
+      max-height: 220px; overflow: auto; box-shadow: 0 8px 20px rgba(15,23,42,0.08);
     }
-
-    /* Help Button */
-    .help-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      background: #e5e7eb;
-      border: none;
-      font-size: 11px;
-      font-weight: 600;
-      color: #6b7280;
-      cursor: pointer;
-      margin-left: 6px;
-      vertical-align: middle;
-      transition: all 0.15s;
+    .autocomplete-option {
+      width: 100%; display: flex; justify-content: space-between; gap: 8px;
+      padding: 8px 10px; border: none; background: transparent; cursor: pointer; text-align: left;
     }
-
-    .help-btn:hover {
-      background: #3b82f6;
-      color: white;
+    .autocomplete-option:hover { background: #f3f4f6; }
+    .option-label { font-size: 13px; color: #111827; }
+    .option-id { font-size: 11px; color: #9ca3af; }
+    .choice-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 28px; align-items: center; }
+    .selected-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 999px; background: #eff6ff; color: #1d4ed8; font-size: 12px;
     }
-
-    /* Help Tooltip */
-    .help-tooltip {
-      margin: 12px 0;
-      padding: 14px 16px;
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-left: 4px solid #3b82f6;
-      border-radius: 8px;
-      font-size: 13px;
+    .chip-clear { border: none; background: transparent; cursor: pointer; color: #64748b; font-size: 14px; }
+    .empty-hint { font-size: 12px; color: #94a3b8; }
+    .quick-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .quick-btn {
+      border: 1px solid #e5e7eb; background: #f9fafb; border-radius: 999px;
+      padding: 4px 10px; font-size: 12px; cursor: pointer;
     }
-
-    .help-tooltip strong {
-      display: block;
-      color: #1e40af;
-      font-family: monospace;
-      font-size: 13px;
-      margin-bottom: 8px;
+    .quick-btn.active { background: #dbeafe; border-color: #93c5fd; color: #1d4ed8; }
+    .empty { font-size: 13px; color: #94a3b8; padding: 8px 4px; }
+    .validation-message {
+      display: flex; gap: 8px; align-items: flex-start; padding: 12px 14px;
+      background: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; color: #92400e; font-size: 13px;
     }
-
-    .help-tooltip p {
-      margin: 0 0 12px 0;
-      color: #4b5563;
-      line-height: 1.5;
-    }
-
-    .help-details {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      margin-bottom: 12px;
-    }
-
-    .help-row {
-      display: flex;
-      gap: 8px;
-      font-size: 12px;
-    }
-
-    .help-key {
-      color: #6b7280;
-      min-width: 90px;
-    }
-
-    .badge-required {
-      display: inline-block;
-      padding: 2px 8px;
-      background: #fef2f2;
-      color: #dc2626;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: 500;
-    }
-
-    .badge-recommended {
-      display: inline-block;
-      padding: 2px 8px;
-      background: #fefce8;
-      color: #ca8a04;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: 500;
-    }
-
-    .badge-optional {
-      display: inline-block;
-      padding: 2px 8px;
-      background: #f0fdf4;
-      color: #16a34a;
-      border-radius: 4px;
-      font-size: 11px;
-      font-weight: 500;
-    }
-
-    .help-examples {
-      font-size: 12px;
-      color: #6b7280;
-      padding-top: 8px;
-      border-top: 1px solid #e5e7eb;
-    }
-
-    .help-examples strong {
-      display: inline;
-      color: #374151;
-      font-family: inherit;
-      font-size: 12px;
-    }
-
-    @media (max-width: 600px) {
-      .form-row {
-        grid-template-columns: 1fr;
-      }
+    .warning-icon {
+      width: 18px; height: 18px; border-radius: 50%; background: #f59e0b; color: #fff;
+      display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0;
     }
   `],
 })
-export class SampleCharacteristicsComponent {
+export class SampleCharacteristicsComponent implements OnInit {
   @Input() aiEnabled = false;
 
   readonly wizardState = inject(WizardStateService);
   private readonly ols = olsService;
-
   readonly state = this.wizardState.state;
 
-  // Search states
-  readonly organismSearch = signal('');
-  readonly diseaseSearch = signal('');
-  readonly organismPartSearch = signal('');
+  readonly loading = signal(false);
+  readonly loadError = signal<string | null>(null);
+  readonly showRecommended = signal(false);
 
-  // Results
-  readonly organismResults = signal<OntologyTerm[]>([]);
-  readonly diseaseResults = signal<OntologyTerm[]>([]);
-  readonly organismPartResults = signal<OntologyTerm[]>([]);
+  readonly activeColumn = signal<string | null>(null);
+  readonly searchResults = signal<OntologyTerm[]>([]);
+  private readonly searchMap = signal<Record<string, string>>({});
 
-  // Dropdown visibility
-  readonly showOrganismResults = signal(false);
-  readonly showDiseaseResults = signal(false);
-  readonly showOrganismPartResults = signal(false);
+  readonly requiredColumns = computed(() =>
+    (this.state().characteristicColumns || []).filter(
+      c => c.requirement === 'required' && !isWizardSkippedCharacteristic(c.name)
+        && getSpecialtyCharacteristicKey(c.name) !== 'material type'
+    )
+  );
+  readonly recommendedColumns = computed(() =>
+    (this.state().characteristicColumns || []).filter(
+      c => c.requirement === 'recommended' && !isWizardSkippedCharacteristic(c.name)
+        && getSpecialtyCharacteristicKey(c.name) !== 'material type'
+    )
+  );
 
-  // Help tooltip state
-  readonly activeHelp = signal<string | null>(null);
-
-  /** Toggle help tooltip for a field */
-  toggleHelp(field: string): void {
-    this.activeHelp.set(this.activeHelp() === field ? null : field);
+  ngOnInit(): void {
+    this.wizardState.ensureDefaultFactors();
+    void this.loadColumns();
   }
 
-  // Special values for organism (metaproteomics)
-  private readonly specialOrganismValues: OntologyTerm[] = [
-    { id: 'not applicable', label: 'not applicable', ontology: 'SDRF' },
-  ];
-
-  // Organism search
-  async searchOrganism(query: string): Promise<void> {
-    this.organismSearch.set(query);
-    const lowerQuery = query.toLowerCase().trim();
-
-    // Check for special values first
-    const matchingSpecial = this.specialOrganismValues.filter(v =>
-      v.label.toLowerCase().includes(lowerQuery)
-    );
-
-    if (lowerQuery === 'not' || lowerQuery === 'not a' || lowerQuery === 'not applicable') {
-      this.organismResults.set(matchingSpecial);
-      this.showOrganismResults.set(true);
-      return;
-    }
-
-    if (query.length < 2) {
-      this.organismResults.set([]);
-      return;
-    }
-
+  private async loadColumns(): Promise<void> {
+    this.loading.set(true);
+    this.loadError.set(null);
     try {
-      const results = await this.ols.searchOrganism(query);
-      const ontologyResults = results.map(r => ({
-        id: r.id,
-        label: r.label,
-        ontology: r.ontologyPrefix?.toUpperCase() || 'NCBITAXON',
-      }));
-      this.organismResults.set([...matchingSpecial, ...ontologyResults]);
-      this.showOrganismResults.set(true);
-    } catch {
-      this.organismResults.set(matchingSpecial);
-      this.showOrganismResults.set(true);
+      await this.wizardState.refreshCharacteristicColumns();
+    } catch (e: any) {
+      this.loadError.set(e?.message || 'Failed to load characteristics');
+    } finally {
+      this.loading.set(false);
     }
   }
 
-  selectOrganism(term: OntologyTerm): void {
-    this.wizardState.setOrganism(term);
-    this.organismSearch.set('');
-    this.organismResults.set([]);
-    this.showOrganismResults.set(false);
+  columnTitle(col: WizardCharacteristicColumnMeta): string {
+    const inner = parseCharacteristicInnerName(col.name);
+    if (!inner) return col.name;
+    return inner.charAt(0).toUpperCase() + inner.slice(1);
   }
 
-  selectQuickOrganism(label: string, id: string): void {
-    this.selectOrganism({ id, label, ontology: 'NCBITAXON' });
+  hintFor(col: WizardCharacteristicColumnMeta): string {
+    return `Add one or more values for ${col.name}`;
   }
 
-  clearOrganism(): void {
-    this.wizardState.setOrganism(null as any);
+  choices(columnName: string): CharacteristicChoice[] {
+    return this.state().characteristicChoices?.[columnName] || [];
   }
 
-  // Special values for disease
-  private readonly specialDiseaseValues: OntologyTerm[] = [
-    { id: 'PATO:0000461', label: 'normal', ontology: 'PATO' },
-    { id: 'not applicable', label: 'not applicable', ontology: 'SDRF' },
-    { id: 'not available', label: 'not available', ontology: 'SDRF' },
-  ];
-
-  // Disease search
-  async searchDisease(query: string): Promise<void> {
-    this.diseaseSearch.set(query);
-    const lowerQuery = query.toLowerCase().trim();
-
-    // Check for special values first
-    const matchingSpecial = this.specialDiseaseValues.filter(v =>
-      v.label.toLowerCase().includes(lowerQuery)
+  hasChoice(columnName: string, value: string): boolean {
+    return this.choices(columnName).some(
+      c => c.value.trim().toLowerCase() === value.trim().toLowerCase()
     );
+  }
 
-    if (lowerQuery === 'normal' || lowerQuery === 'not' || lowerQuery === 'not a' ||
-        lowerQuery === 'not available' || lowerQuery === 'not applicable') {
-      this.diseaseResults.set(matchingSpecial);
-      this.showDiseaseResults.set(true);
+  quickPicks(col: WizardCharacteristicColumnMeta): string[] {
+    return getQuickPickSuggestions(col.name, col);
+  }
+
+  toggleQuickPick(columnName: string, value: string): void {
+    if (this.hasChoice(columnName, value)) {
+      this.wizardState.removeCharacteristicChoice(columnName, value);
+    } else {
+      this.wizardState.addCharacteristicChoice(columnName, value);
+    }
+  }
+
+  searchQuery(columnName: string): string {
+    return this.searchMap()[columnName] || '';
+  }
+
+  searchPlaceholder(col: WizardCharacteristicColumnMeta): string {
+    if (col.ontologies?.length) {
+      return `Search ${(col.ontologies || []).join(', ')} or type a value…`;
+    }
+    return 'Type a value and press Enter or +';
+  }
+
+  onSearch(col: WizardCharacteristicColumnMeta, query: string): void {
+    this.searchMap.update(m => ({ ...m, [col.name]: query }));
+    this.activeColumn.set(col.name);
+    void this.runOntologySearch(col, query);
+  }
+
+  addFreeText(col: WizardCharacteristicColumnMeta): void {
+    const q = (this.searchMap()[col.name] || '').trim();
+    if (!q) return;
+    const key = getSpecialtyCharacteristicKey(col.name);
+    const value =
+      key === 'organism' ? q : q.toLowerCase() === q ? q : (key === 'disease' || key === 'organism part' ? q.toLowerCase() : q);
+    this.wizardState.addCharacteristicChoice(col.name, value);
+    this.searchMap.update(m => ({ ...m, [col.name]: '' }));
+    this.searchResults.set([]);
+  }
+
+  selectOntology(columnName: string, term: OntologyTerm): void {
+    const key = getSpecialtyCharacteristicKey(columnName);
+    const value =
+      key === 'organism' ? term.label : term.label.toLowerCase();
+    this.wizardState.addCharacteristicChoice(columnName, value, term);
+    this.searchMap.update(m => ({ ...m, [columnName]: '' }));
+    this.searchResults.set([]);
+    this.activeColumn.set(null);
+  }
+
+  private async runOntologySearch(
+    col: WizardCharacteristicColumnMeta,
+    query: string
+  ): Promise<void> {
+    const q = query.trim();
+    if (q.length < 2) {
+      this.searchResults.set([]);
       return;
     }
-
-    if (query.length < 2) {
-      this.diseaseResults.set([]);
-      return;
-    }
-
+    const key = getSpecialtyCharacteristicKey(col.name);
     try {
-      const results = await this.ols.searchDisease(query);
-      const ontologyResults = results.map(r => ({
-        id: r.id,
-        label: r.label,
-        ontology: r.ontologyPrefix?.toUpperCase() || 'MONDO',
-      }));
-      // Prepend matching special values
-      this.diseaseResults.set([...matchingSpecial, ...ontologyResults]);
-      this.showDiseaseResults.set(true);
+      let suggestions: OntologySuggestion[] = [];
+      if (key === 'organism') {
+        suggestions = await this.ols.searchOrganism(q);
+      } else if (key === 'disease') {
+        suggestions = await this.ols.searchDisease(q);
+      } else if (key === 'organism part') {
+        suggestions = await this.ols.searchTissue(q);
+      } else if (col.ontologies?.length) {
+        const response = await this.ols.search({
+          query: q,
+          ontology: col.ontologies,
+          rows: 12,
+        });
+        suggestions = response.suggestions;
+      }
+      if (this.activeColumn() === col.name) {
+        this.searchResults.set(suggestions.slice(0, 12).map(suggestionToTerm));
+      }
     } catch {
-      this.diseaseResults.set(matchingSpecial);
-      this.showDiseaseResults.set(true);
+      this.searchResults.set([]);
     }
-  }
-
-  selectDisease(term: OntologyTerm): void {
-    this.wizardState.setDisease(term);
-    this.diseaseSearch.set('');
-    this.diseaseResults.set([]);
-    this.showDiseaseResults.set(false);
-  }
-
-  selectQuickDisease(value: string): void {
-    this.wizardState.setDisease(value);
-    this.diseaseSearch.set('');
-    this.diseaseResults.set([]);
-    this.showDiseaseResults.set(false);
-  }
-
-  selectQuickDiseaseOntology(label: string, id: string): void {
-    this.selectDisease({ id, label, ontology: 'MONDO' });
-  }
-
-  /** Select a special value for disease (not applicable, not available) */
-  selectSpecialDisease(value: string): void {
-    this.selectDisease({ id: value, label: value, ontology: 'SDRF' });
-  }
-
-  clearDisease(): void {
-    this.wizardState.setDisease(null as any);
-  }
-
-  isDiseaseString(): boolean {
-    return typeof this.state().disease === 'string';
-  }
-
-  getDiseaseLabel(): string {
-    const disease = this.state().disease;
-    if (!disease) return '';
-    if (typeof disease === 'string') return disease;
-    return disease.label;
-  }
-
-  getDiseaseId(): string {
-    const disease = this.state().disease;
-    if (!disease || typeof disease === 'string') return '';
-    return disease.id;
-  }
-
-  // Special values allowed for organism part per SDRF spec
-  private readonly specialOrganismPartValues: OntologyTerm[] = [
-    { id: 'not applicable', label: 'not applicable', ontology: 'SDRF' },
-    { id: 'not available', label: 'not available', ontology: 'SDRF' },
-  ];
-
-  // Organism Part search
-  async searchOrganismPart(query: string): Promise<void> {
-    this.organismPartSearch.set(query);
-    const lowerQuery = query.toLowerCase().trim();
-
-    // Check for special values first
-    const matchingSpecial = this.specialOrganismPartValues.filter(v =>
-      v.label.toLowerCase().includes(lowerQuery)
-    );
-
-    if (lowerQuery === 'not' || lowerQuery === 'not a' || lowerQuery === 'not av' ||
-        lowerQuery === 'not available' || lowerQuery === 'not applicable') {
-      this.organismPartResults.set(matchingSpecial);
-      this.showOrganismPartResults.set(true);
-      return;
-    }
-
-    if (query.length < 2) {
-      this.organismPartResults.set([]);
-      return;
-    }
-
-    try {
-      const results = await this.ols.searchTissue(query);
-      const ontologyResults = results.map(r => ({
-        id: r.id,
-        label: r.label,
-        ontology: r.ontologyPrefix?.toUpperCase() || 'UBERON',
-      }));
-      // Prepend special values if they match
-      this.organismPartResults.set([...matchingSpecial, ...ontologyResults]);
-      this.showOrganismPartResults.set(true);
-    } catch {
-      this.organismPartResults.set(matchingSpecial);
-      this.showOrganismPartResults.set(true);
-    }
-  }
-
-  selectOrganismPart(term: OntologyTerm): void {
-    this.wizardState.setOrganismPart(term);
-    this.organismPartSearch.set('');
-    this.organismPartResults.set([]);
-    this.showOrganismPartResults.set(false);
-  }
-
-  selectQuickOrganismPart(label: string, id: string): void {
-    this.selectOrganismPart({ id, label, ontology: 'UBERON' });
-  }
-
-  /** Select a special value for organism part (not applicable, not available) */
-  selectSpecialOrganismPart(value: string): void {
-    this.selectOrganismPart({ id: value, label: value, ontology: 'SDRF' });
-  }
-
-  clearOrganismPart(): void {
-    this.wizardState.setOrganismPart(null as any);
   }
 }

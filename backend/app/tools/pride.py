@@ -1,0 +1,147 @@
+"""PRIDE Archive lookups: project metadata plus raw/acquisition file names.
+
+The frontend already fetches raw file names directly
+(src/app/core/services/pride-archive.service.ts); this module additionally
+returns the project-level metadata and publication references the assistant
+needs to draft an annotation.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from .http import ToolHttpError, get_json
+
+PRIDE_API_BASE = "https://www.ebi.ac.uk/pride/ws/archive/v3"
+PROJECT_URL = "https://www.ebi.ac.uk/pride/archive/projects/{accession}"
+
+RAW_EXTENSIONS = (
+    ".raw", ".wiff", ".wiff.scan", ".d", ".d.zip", ".mzml", ".mzxml", ".mzml.gz",
+    ".baf", ".tdf", ".tdf_bin", ".lcd", ".qgd", ".dat", ".pkl", ".ibd",
+)
+ACCESSION_RE = re.compile(r"\b(PXD|PRD|MSV|IPX)\d{4,}\b", re.IGNORECASE)
+
+
+def normalize_accession(value: str) -> str:
+    """Extract and upper-case a ProteomeXchange accession from free text."""
+    match = ACCESSION_RE.search(value or "")
+    if not match:
+        raise ToolHttpError(f"'{value}' does not contain a ProteomeXchange accession (e.g. PXD012345).")
+    return match.group(0).upper()
+
+
+def _cv_names(items: Any) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    names: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            name = item.get("name") or item.get("value")
+            accession = item.get("accession")
+            if name:
+                names.append(f"{name} ({accession})" if accession else str(name))
+        elif item:
+            names.append(str(item))
+    return names
+
+
+def _strip_html(text: str | None) -> str:
+    if not text:
+        return ""
+    cleaned = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+async def fetch_project(accession: str) -> dict:
+    """Project-level metadata, trimmed to what matters for SDRF annotation."""
+    accession = normalize_accession(accession)
+    payload = await get_json(f"{PRIDE_API_BASE}/projects/{accession}")
+
+    references = []
+    for reference in payload.get("references") or []:
+        if not isinstance(reference, dict):
+            continue
+        references.append(
+            {
+                "citation": reference.get("referenceLine", ""),
+                "pubmedId": str(reference["pubmedID"]) if reference.get("pubmedID") else None,
+                "doi": reference.get("doi"),
+            }
+        )
+
+    sample_attributes: list[str] = []
+    for group in payload.get("sampleAttributes") or []:
+        for item in group if isinstance(group, list) else [group]:
+            if isinstance(item, dict):
+                key = _strip_html(str(item.get("key", {}).get("name") if isinstance(item.get("key"), dict) else item.get("key")))
+                value = _strip_html(str(item.get("value", {}).get("name") if isinstance(item.get("value"), dict) else item.get("value")))
+                if key or value:
+                    sample_attributes.append(f"{key}: {value}".strip(": "))
+
+    return {
+        "accession": accession,
+        "title": payload.get("title", ""),
+        "description": _strip_html(payload.get("projectDescription"))[:2500],
+        "sampleProcessingProtocol": _strip_html(payload.get("sampleProcessingProtocol"))[:2500],
+        "dataProcessingProtocol": _strip_html(payload.get("dataProcessingProtocol"))[:2500],
+        "organisms": _cv_names(payload.get("organisms")),
+        "organismParts": _cv_names(payload.get("organismParts")),
+        "diseases": _cv_names(payload.get("diseases")),
+        "instruments": _cv_names(payload.get("instruments")),
+        "experimentTypes": _cv_names(payload.get("experimentTypes")),
+        "quantificationMethods": _cv_names(payload.get("quantificationMethods")),
+        "softwares": _cv_names(payload.get("softwares")),
+        "identifiedPtms": _cv_names(payload.get("identifiedPTMStrings")),
+        "keywords": payload.get("keywords") or [],
+        "doi": payload.get("doi"),
+        "publicationDate": payload.get("publicationDate"),
+        "submissionType": payload.get("submissionType"),
+        "references": references,
+        "sampleAttributes": sample_attributes[:40],
+        "url": PROJECT_URL.format(accession=accession),
+    }
+
+
+def _is_raw(name: str, category: str | None) -> bool:
+    if (category or "").upper() == "RAW":
+        return True
+    lowered = name.lower()
+    return any(lowered.endswith(ext) for ext in RAW_EXTENSIONS)
+
+
+async def fetch_raw_files(accession: str, limit: int = 400) -> dict:
+    """Raw / acquisition file names for a project."""
+    accession = normalize_accession(accession)
+    payload = await get_json(f"{PRIDE_API_BASE}/projects/{accession}/files/all", timeout=60.0)
+
+    entries = payload if isinstance(payload, list) else payload.get("_embedded", {}).get("files", payload.get("files", []))
+    raw_names: list[str] = []
+    all_count = 0
+
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        all_count += 1
+        name = entry.get("fileName") or entry.get("name") or ""
+        if name and _is_raw(name, entry.get("fileCategory", {}).get("value") if isinstance(entry.get("fileCategory"), dict) else entry.get("fileCategory")):
+            raw_names.append(name)
+
+    raw_names = sorted(dict.fromkeys(raw_names))
+    return {
+        "accession": accession,
+        "rawFileCount": len(raw_names),
+        "totalFileCount": all_count,
+        "rawFileNames": raw_names[:limit],
+        "truncated": len(raw_names) > limit,
+    }
+
+
+async def fetch_dataset_overview(accession: str) -> dict:
+    """Project metadata plus raw files in one call (the usual first agent step)."""
+    project = await fetch_project(accession)
+    try:
+        files = await fetch_raw_files(accession)
+    except ToolHttpError as error:
+        files = {"accession": project["accession"], "rawFileCount": 0, "rawFileNames": [], "error": str(error)}
+    return {**project, "files": files}

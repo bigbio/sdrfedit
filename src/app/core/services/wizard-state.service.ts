@@ -4,7 +4,7 @@
  * Signal-based state management for the SDRF Creation Wizard.
  */
 
-import { Injectable, signal, computed } from '@angular/core';
+import { Injectable, signal, computed, inject } from '@angular/core';
 import {
   WizardState,
   WizardTemplate,
@@ -12,18 +12,111 @@ import {
   WizardModification,
   WizardCleavageAgent,
   WizardDataFile,
+  WizardFactor,
+  WizardMsRun,
+  WizardChannelAssignment,
   OntologyTerm,
   DynamicColumnDefault,
+  WizardCharacteristicColumnMeta,
+  CharacteristicChoice,
   WIZARD_STEPS,
   LABEL_CONFIGS,
   createEmptyWizardState,
   createDefaultSample,
+  createDefaultDiseaseFactor,
+  normalizeFactor,
+  getSampleTemplateId,
+  hasCellLinesExperiment,
   isHumanTemplate,
   isCellLineTemplate,
   isVertebrateTemplate,
   isInvertebrateTemplate,
   isPlantTemplate,
+  upsertDynamicColumnDefault,
+  getSpecialtyCharacteristicKey,
+  isWizardSkippedCharacteristic,
+  addCharacteristicChoiceToMap,
+  removeCharacteristicChoiceFromMap,
+  getCharacteristicChoices,
+  choiceValuesEqual,
+  materializeSampleFieldsFromChoices,
+  isLabelFree,
+  resolveWizardLabels,
+  packSamplesIntoRuns,
+  remapRunsToLabels,
+  remapSingleRunToLabels,
+  normalizeMsRunKits,
+  collectUsedPlexKitIds,
+  buildPlannerFileSlots,
+  validateMsRuns,
+  validateRunsAndFiles,
+  createEmptyChannelsForLabels,
+  parseFractionTechFromName,
+  pruneChannelsToSamples,
 } from '../models/wizard';
+import { TemplateService } from './template.service';
+
+const RESERVED_VALUE_PATTERN = /^(not available|not applicable|normal|anonymized|pooled)$/i;
+
+function syncLegacyFieldsFromChoices(state: WizardState): WizardState {
+  const choices = state.characteristicChoices || {};
+  let next = { ...state };
+
+  const first = (col: string): CharacteristicChoice | undefined =>
+    (choices[col] || [])[0];
+
+  const organism = first('characteristics[organism]');
+  next.organism = organism
+    ? organism.ontologyTerm || {
+        id: organism.value,
+        label: organism.value,
+        ontology: 'SDRF',
+      }
+    : null;
+
+  const disease = first('characteristics[disease]');
+  next.disease = disease
+    ? disease.ontologyTerm || disease.value
+    : null;
+
+  const part = first('characteristics[organism part]');
+  next.organismPart = part ? part.ontologyTerm || part.value : null;
+
+  const sex = first('characteristics[sex]');
+  if (sex && (sex.value === 'male' || sex.value === 'female' || sex.value === 'not available')) {
+    next.defaultSex = sex.value;
+  } else if (!(choices['characteristics[sex]'] || []).length) {
+    next.defaultSex = null;
+  }
+
+  const age = first('characteristics[age]');
+  next.defaultAge = age?.value || '';
+
+  const cell = first('characteristics[cell line]');
+  next.defaultCellLine = cell?.value || '';
+
+  const strain = first('characteristics[strain/breed]');
+  next.strainBreed = strain?.value || '';
+
+  const stage = first('characteristics[developmental stage]');
+  next.developmentalStage = stage?.value || '';
+
+  let dynamic = [...next.dynamicColumnDefaults];
+  for (const [columnName, list] of Object.entries(choices)) {
+    if (list.length === 1) {
+      dynamic = upsertDynamicColumnDefault(
+        dynamic,
+        columnName,
+        list[0].value,
+        list[0].ontologyTerm
+      );
+    } else if (list.length === 0) {
+      dynamic = dynamic.filter(d => d.columnName !== columnName);
+    }
+  }
+  next.dynamicColumnDefaults = dynamic;
+  return next;
+}
 
 @Injectable({ providedIn: 'root' })
 export class WizardStateService {
@@ -31,6 +124,7 @@ export class WizardStateService {
 
   private readonly _state = signal<WizardState>(createEmptyWizardState());
   private readonly _currentStep = signal<number>(0);
+  private readonly templateService = inject(TemplateService);
 
   /** Read-only state accessor */
   readonly state = this._state.asReadonly();
@@ -46,178 +140,307 @@ export class WizardStateService {
 
   // ============ Computed Values ============
 
-  /** Current step configuration */
-  readonly currentStepConfig = computed(() => {
-    return WIZARD_STEPS[this._currentStep()];
-  });
+  readonly currentStepConfig = computed(() => WIZARD_STEPS[this._currentStep()]);
 
-  /** Selected template */
-  readonly template = computed(() => this._state().template);
+  /** Selected sample template (preferred) */
+  readonly template = computed(() => getSampleTemplateId(this._state()));
 
-  /** Number of samples */
+  readonly sampleTemplate = computed(() => this._state().sampleTemplate);
+
+  readonly technologyTemplate = computed(() => this._state().technologyTemplate);
+
+  readonly experimentTemplates = computed(() => this._state().experimentTemplates);
+
   readonly sampleCount = computed(() => this._state().sampleCount);
 
-  /** Sample entries */
   readonly samples = computed(() => this._state().samples);
 
-  /** Selected label configuration */
+  readonly factors = computed(() => this._state().factors);
+
   readonly labelConfig = computed(() => {
     const configId = this._state().labelConfigId;
     return LABEL_CONFIGS.find(c => c.id === configId) || LABEL_CONFIGS[0];
   });
 
-  /** Whether fractionation is enabled */
+  readonly msRuns = computed(() => this._state().msRuns || []);
+
+  readonly isLabelFreeMode = computed(() => isLabelFree(this._state()));
+
   readonly hasFractions = computed(() => this._state().hasFractions);
 
-  /** Number of fractions */
   readonly fractionCount = computed(() => this._state().fractionCount);
 
-  /** Technical replicates count */
   readonly technicalReplicates = computed(() => this._state().technicalReplicates);
 
-  /** Data files */
   readonly dataFiles = computed(() => this._state().dataFiles);
 
-  /** Selected modifications */
   readonly modifications = computed(() => this._state().modifications);
 
   // ============ Validation Computed ============
 
-  /** Whether Step 1 is valid */
   readonly isStep1Valid = computed(() => {
     const state = this._state();
-    return state.template !== null && state.sampleCount >= 1;
+    if (state.sampleCount < 1) return false;
+    return this.templateService.validateTemplateCombination({
+      technologyTemplate: state.technologyTemplate,
+      sampleTemplate: getSampleTemplateId(state),
+      experimentTemplates: state.experimentTemplates || [],
+    }).valid;
   });
 
-  /** Whether Step 2 is valid */
+  readonly step1Combination = computed(() => {
+    const state = this._state();
+    return this.templateService.validateTemplateCombination({
+      technologyTemplate: state.technologyTemplate,
+      sampleTemplate: getSampleTemplateId(state),
+      experimentTemplates: state.experimentTemplates || [],
+    });
+  });
+
   readonly isStep2Valid = computed(() => {
     const state = this._state();
+    const choices = state.characteristicChoices || {};
+    const required = (state.characteristicColumns || []).filter(
+      c =>
+        c.requirement === 'required' &&
+        !isWizardSkippedCharacteristic(c.name) &&
+        getSpecialtyCharacteristicKey(c.name) !== 'material type'
+    );
+
+    const characteristicsOk =
+      required.length === 0
+        ? (choices['characteristics[organism]'] || []).length >= 1 &&
+          (choices['characteristics[disease]'] || []).length >= 1 &&
+          (choices['characteristics[organism part]'] || []).length >= 1
+        : required.every(col => (choices[col.name] || []).length >= 1);
+
+    return characteristicsOk && this.isFactorsDefined();
+  });
+
+  /**
+   * Step 2: at least one enabled factor with a name and ≥1 candidate value.
+   */
+  readonly isFactorsDefined = computed(() => {
+    const factors = this._state().factors.filter(f => f.enabled);
     return (
-      state.organism !== null &&
-      state.disease !== null &&
-      state.organismPart !== null
+      factors.length > 0 &&
+      factors.every(f => f.name.trim().length > 0 && (f.values?.length || 0) >= 1)
     );
   });
 
-  /** Whether Step 3 is valid */
+  /** @deprecated Use isFactorsDefined (Step 2) or per-sample checks in isStep3Valid. */
+  readonly isFactorsValid = this.isFactorsDefined;
+
+  /** Sample Values: names, bio-reps, multi-value chars, and per-sample factor picks. */
   readonly isStep3Valid = computed(() => {
     const state = this._state();
-    return (
-      state.samples.length > 0 &&
-      state.samples.every(s => s.sourceName.trim().length > 0)
+    if (state.samples.length === 0) return false;
+    if (!state.samples.every(s => s.sourceName.trim().length > 0)) return false;
+
+    const multiRequired = (state.characteristicColumns || []).filter(c => {
+      if (c.requirement !== 'required') return false;
+      if (isWizardSkippedCharacteristic(c.name)) return false;
+      if (getSpecialtyCharacteristicKey(c.name) === 'material type') return false;
+      return (state.characteristicChoices?.[c.name] || []).length >= 2;
+    });
+
+    const sampleValuesOk = state.samples.every(sample =>
+      multiRequired.every(col => !!sample.characteristicValues?.[col.name]?.trim())
     );
+
+    const enabledFactors = state.factors.filter(f => f.enabled && f.name.trim());
+    const factorValuesOk = state.samples.every(sample =>
+      enabledFactors.every(f => !!sample.factorValues?.[f.name]?.trim())
+    );
+
+    return sampleValuesOk && factorValuesOk;
   });
 
-  /** Whether Step 4 is valid */
   readonly isStep4Valid = computed(() => {
-    const state = this._state();
-    return state.labelConfigId !== '' || state.customLabels.length > 0;
+    return validateMsRuns(this._state());
   });
 
-  /** Whether Step 5 is valid */
+  /** Combined Runs & Files step (packing + assigned files). */
+  readonly isRunsFilesValid = computed(() => validateRunsAndFiles(this._state()));
+
   readonly isStep5Valid = computed(() => {
     const state = this._state();
     return state.instrument !== null && state.cleavageAgent !== null;
   });
 
-  /** Whether Step 6 is valid */
   readonly isStep6Valid = computed(() => {
     const state = this._state();
     return state.dataFiles.length > 0;
   });
 
-  /** Whether all steps are valid */
+  /** @deprecated Use `isFactorsDefined`. */
+  readonly isStep7Valid = this.isFactorsDefined;
+
   readonly isAllValid = computed(() => {
     return (
       this.isStep1Valid() &&
       this.isStep2Valid() &&
       this.isStep3Valid() &&
-      this.isStep4Valid() &&
-      this.isStep5Valid() &&
-      this.isStep6Valid()
+      this.isRunsFilesValid() &&
+      this.isStep5Valid()
     );
   });
 
-  /** Whether current step is valid */
   readonly isCurrentStepValid = computed(() => {
     const step = this._currentStep();
-    switch (step) {
-      case 0: return this.isStep1Valid();
-      case 1: return this.isStep2Valid();
-      case 2: return this.isStep3Valid();
-      case 3: return this.isStep4Valid();
-      case 4: return this.isStep5Valid();
-      case 5: return this.isStep6Valid();
-      case 6: return this.isAllValid();
-      default: return false;
+    const id = WIZARD_STEPS[step]?.id;
+    switch (id) {
+      case 'setup':
+        return this.isStep1Valid();
+      case 'characteristics':
+        return this.isStep2Valid();
+      case 'samples':
+        return this.isStep3Valid();
+      case 'runs-files':
+        return this.isRunsFilesValid();
+      case 'protocol':
+        return this.isStep5Valid();
+      case 'review':
+        return this.isAllValid();
+      default:
+        return false;
     }
   });
 
-  /** Whether can proceed to next step */
   readonly canProceed = computed(() => {
     return this.isCurrentStepValid() && this._currentStep() < this.totalSteps - 1;
   });
 
-  /** Whether can go back */
-  readonly canGoBack = computed(() => {
-    return this._currentStep() > 0;
-  });
+  readonly canGoBack = computed(() => this._currentStep() > 0);
 
-  /** Whether can create (on final step) */
   readonly canCreate = computed(() => {
     return this._currentStep() === this.totalSteps - 1 && this.isAllValid();
   });
 
-  /** Progress percentage */
   readonly progressPercent = computed(() => {
     return Math.round(((this._currentStep() + 1) / this.totalSteps) * 100);
   });
 
   // ============ Navigation Methods ============
 
-  /**
-   * Go to next step.
-   */
   nextStep(): void {
     if (this.canProceed()) {
-      this._currentStep.update(s => s + 1);
+      const next = this._currentStep() + 1;
+      if (WIZARD_STEPS[next]?.id === 'characteristics') {
+        this.ensureDefaultFactors();
+      }
+      if (WIZARD_STEPS[next]?.id === 'samples') {
+        this.syncCharacteristicAssignments();
+        this.syncFactorAssignments();
+        this.ensureDefaultFactors();
+      }
+      this._currentStep.set(next);
+      if (WIZARD_STEPS[next]?.id === 'runs-files') {
+        this.ensureMsRunsForFilesStep();
+      }
     }
   }
 
-  /**
-   * Go to previous step.
-   */
   previousStep(): void {
     if (this.canGoBack()) {
       this._currentStep.update(s => s - 1);
     }
   }
 
-  /**
-   * Go to a specific step.
-   */
   goToStep(step: number): void {
     if (step >= 0 && step < this.totalSteps) {
+      if (WIZARD_STEPS[step]?.id === 'characteristics') {
+        this.ensureDefaultFactors();
+      }
+      if (WIZARD_STEPS[step]?.id === 'samples') {
+        this.syncCharacteristicAssignments();
+        this.syncFactorAssignments();
+        this.ensureDefaultFactors();
+      }
       this._currentStep.set(step);
+      if (WIZARD_STEPS[step]?.id === 'runs-files') {
+        this.ensureMsRunsForFilesStep();
+      }
     }
+  }
+
+  /**
+   * Entering Runs & Files: ensure at least one packed run exists.
+   * Does not auto-generate file slots (PXD / paste / planner are explicit).
+   */
+  ensureMsRunsForFilesStep(): void {
+    const s = this._state();
+    if ((s.msRuns || []).length === 0) {
+      this.autoPackSamplesIntoRuns();
+    } else {
+      this._state.update(st => {
+        const allSamples = st.samples.map(sample => sample.index);
+        return {
+          ...st,
+          msRuns: normalizeMsRunKits(st.msRuns || [], st.labelConfigId || 'lf').map(
+            run => ({ ...run, sampleIndices: allSamples })
+          ),
+        };
+      });
+    }
+  }
+
+  /**
+   * Auto-create planner file slots when entering Step 6 if the table is empty.
+   * @deprecated Prefer explicit Generate on Runs & Files; kept for compatibility.
+   */
+  ensurePlannerDataFiles(): void {
+    if (this._state().dataFiles.length > 0) return;
+    this.generateFileSlotsFromPlanner();
   }
 
   // ============ Step 1: Experiment Setup ============
 
   /**
-   * Set the template type.
+   * Set the sample template (also syncs legacy `template` field).
    */
-  setTemplate(template: WizardTemplate): void {
-    this._state.update(s => ({ ...s, template }));
+  setSampleTemplate(template: WizardTemplate | null): void {
+    this._state.update(s => ({
+      ...s,
+      sampleTemplate: template,
+      template,
+    }));
   }
 
   /**
-   * Set the sample count.
+   * Set the technology template.
    */
+  setTechnologyTemplate(template: WizardTemplate): void {
+    this._state.update(s => ({ ...s, technologyTemplate: template }));
+  }
+
+  setExperimentTemplates(templates: string[]): void {
+    this._state.update(s => ({ ...s, experimentTemplates: [...templates] }));
+  }
+
+  toggleExperimentTemplate(templateId: string): void {
+    this._state.update(s => {
+      const current = s.experimentTemplates || [];
+      const exists = current.includes(templateId);
+      return {
+        ...s,
+        experimentTemplates: exists
+          ? current.filter(id => id !== templateId)
+          : [...current, templateId],
+      };
+    });
+  }
+
+  /**
+   * @deprecated Use setSampleTemplate
+   */
+  setTemplate(template: WizardTemplate | null): void {
+    this.setSampleTemplate(template);
+  }
+
   setSampleCount(count: number): void {
     const sampleCount = Math.max(1, Math.floor(count));
     this._state.update(s => {
-      // Adjust samples array
       const samples = [...s.samples];
       while (samples.length < sampleCount) {
         samples.push(createDefaultSample(samples.length + 1));
@@ -229,9 +452,6 @@ export class WizardStateService {
     });
   }
 
-  /**
-   * Set the experiment description.
-   */
   setExperimentDescription(description: string): void {
     this._state.update(s => ({ ...s, experimentDescription: description }));
   }
@@ -239,134 +459,392 @@ export class WizardStateService {
   // ============ Step 2: Sample Characteristics ============
 
   /**
-   * Set the organism.
+   * Load characteristic columns from selected sample + experiment templates.
    */
-  setOrganism(organism: OntologyTerm): void {
-    this._state.update(s => ({ ...s, organism }));
+  async refreshCharacteristicColumns(): Promise<void> {
+    const state = this._state();
+    const result = await this.templateService.getWizardCharacteristicColumns({
+      sampleTemplate: getSampleTemplateId(state),
+      experimentTemplates: state.experimentTemplates || [],
+    });
+
+    const meta: WizardCharacteristicColumnMeta[] = result.all.map(c => ({
+      name: c.name,
+      description: c.description || '',
+      requirement: (c.requirement || 'optional') as WizardCharacteristicColumnMeta['requirement'],
+      ontologies: c.validators?.find(v => v.validatorName === 'ontology')?.params?.ontologies,
+      allowNotAvailable: c.allowNotAvailable,
+      allowNotApplicable: c.allowNotApplicable,
+    }));
+
+    this._state.update(s => ({ ...s, characteristicColumns: meta }));
   }
 
-  /**
-   * Set the disease.
-   */
+  addCharacteristicChoice(
+    columnName: string,
+    value: string,
+    ontologyTerm?: OntologyTerm
+  ): void {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    this._state.update(s => {
+      const characteristicChoices = addCharacteristicChoiceToMap(
+        s.characteristicChoices || {},
+        columnName,
+        { value: trimmed, ontologyTerm }
+      );
+      return syncLegacyFieldsFromChoices({ ...s, characteristicChoices });
+    });
+  }
+
+  removeCharacteristicChoice(columnName: string, value: string): void {
+    this._state.update(s => {
+      const characteristicChoices = removeCharacteristicChoiceFromMap(
+        s.characteristicChoices || {},
+        columnName,
+        value
+      );
+      return syncLegacyFieldsFromChoices({ ...s, characteristicChoices });
+    });
+  }
+
+  getChoices(columnName: string): CharacteristicChoice[] {
+    return getCharacteristicChoices(this._state(), columnName);
+  }
+
+  setOrganism(organism: OntologyTerm | null): void {
+    if (!organism) {
+      this._state.update(s => {
+        const characteristicChoices = { ...(s.characteristicChoices || {}) };
+        delete characteristicChoices['characteristics[organism]'];
+        return syncLegacyFieldsFromChoices({ ...s, characteristicChoices });
+      });
+      return;
+    }
+    this.addCharacteristicChoice(
+      'characteristics[organism]',
+      organism.label,
+      organism
+    );
+  }
+
   setDisease(disease: OntologyTerm | string): void {
-    this._state.update(s => ({ ...s, disease }));
+    if (typeof disease === 'string') {
+      if (!disease.trim()) {
+        this._state.update(s => {
+          const characteristicChoices = { ...(s.characteristicChoices || {}) };
+          delete characteristicChoices['characteristics[disease]'];
+          return syncLegacyFieldsFromChoices({ ...s, characteristicChoices });
+        });
+        return;
+      }
+      this.addCharacteristicChoice('characteristics[disease]', disease);
+      return;
+    }
+    this.addCharacteristicChoice(
+      'characteristics[disease]',
+      disease.label.toLowerCase(),
+      disease
+    );
   }
 
-  /**
-   * Set the organism part.
-   */
-  setOrganismPart(organismPart: OntologyTerm): void {
-    this._state.update(s => ({ ...s, organismPart }));
+  setOrganismPart(organismPart: OntologyTerm | string): void {
+    if (typeof organismPart === 'string') {
+      if (!organismPart.trim()) {
+        this._state.update(s => {
+          const characteristicChoices = { ...(s.characteristicChoices || {}) };
+          delete characteristicChoices['characteristics[organism part]'];
+          return syncLegacyFieldsFromChoices({ ...s, characteristicChoices });
+        });
+        return;
+      }
+      this.addCharacteristicChoice('characteristics[organism part]', organismPart);
+      return;
+    }
+    this.addCharacteristicChoice(
+      'characteristics[organism part]',
+      organismPart.label.toLowerCase(),
+      organismPart
+    );
   }
 
-  /**
-   * Set human-specific default sex.
-   */
   setDefaultSex(sex: 'male' | 'female' | 'not available'): void {
-    this._state.update(s => ({ ...s, defaultSex: sex }));
+    this.addCharacteristicChoice('characteristics[sex]', sex);
   }
 
-  /**
-   * Set human-specific default age.
-   */
   setDefaultAge(age: string): void {
-    this._state.update(s => ({ ...s, defaultAge: age }));
+    if (!age.trim()) {
+      this._state.update(s => {
+        const characteristicChoices = { ...(s.characteristicChoices || {}) };
+        delete characteristicChoices['characteristics[age]'];
+        return syncLegacyFieldsFromChoices({ ...s, characteristicChoices });
+      });
+      return;
+    }
+    this.addCharacteristicChoice('characteristics[age]', age.trim());
   }
 
-  /**
-   * Set cell line name.
-   */
   setDefaultCellLine(cellLine: string): void {
-    this._state.update(s => ({ ...s, defaultCellLine: cellLine }));
+    if (!cellLine.trim()) {
+      this._state.update(s => {
+        const characteristicChoices = { ...(s.characteristicChoices || {}) };
+        delete characteristicChoices['characteristics[cell line]'];
+        return syncLegacyFieldsFromChoices({ ...s, characteristicChoices });
+      });
+      return;
+    }
+    this.addCharacteristicChoice('characteristics[cell line]', cellLine.trim());
   }
 
-  /**
-   * Set vertebrate strain/breed.
-   */
   setStrainBreed(strainBreed: string): void {
-    this._state.update(s => ({ ...s, strainBreed }));
+    if (!strainBreed.trim()) {
+      this._state.update(s => {
+        const characteristicChoices = { ...(s.characteristicChoices || {}) };
+        delete characteristicChoices['characteristics[strain/breed]'];
+        return syncLegacyFieldsFromChoices({ ...s, characteristicChoices });
+      });
+      return;
+    }
+    this.addCharacteristicChoice('characteristics[strain/breed]', strainBreed.trim());
   }
 
-  /**
-   * Set developmental stage.
-   */
   setDevelopmentalStage(developmentalStage: string): void {
-    this._state.update(s => ({ ...s, developmentalStage }));
+    if (!developmentalStage.trim()) {
+      this._state.update(s => {
+        const characteristicChoices = { ...(s.characteristicChoices || {}) };
+        delete characteristicChoices['characteristics[developmental stage]'];
+        return syncLegacyFieldsFromChoices({ ...s, characteristicChoices });
+      });
+      return;
+    }
+    this.addCharacteristicChoice(
+      'characteristics[developmental stage]',
+      developmentalStage.trim()
+    );
   }
 
   // ============ Step 2: Dynamic Column Defaults ============
 
-  /**
-   * Set a dynamic column default value.
-   */
   setColumnDefault(columnName: string, value: string, ontologyTerm?: OntologyTerm): void {
-    this._state.update(s => {
-      const defaults = [...s.dynamicColumnDefaults];
-      const existingIndex = defaults.findIndex(d => d.columnName === columnName);
-
-      if (existingIndex >= 0) {
-        defaults[existingIndex] = { columnName, value, ontologyTerm };
-      } else {
-        defaults.push({ columnName, value, ontologyTerm });
-      }
-
-      return { ...s, dynamicColumnDefaults: defaults };
-    });
+    if (!value.trim()) {
+      this._state.update(s => {
+        const characteristicChoices = { ...(s.characteristicChoices || {}) };
+        delete characteristicChoices[columnName];
+        return syncLegacyFieldsFromChoices({ ...s, characteristicChoices });
+      });
+      return;
+    }
+    this.addCharacteristicChoice(columnName, value, ontologyTerm);
   }
 
-  /**
-   * Get a dynamic column default value.
-   */
   getColumnDefault(columnName: string): DynamicColumnDefault | undefined {
     return this._state().dynamicColumnDefaults.find(d => d.columnName === columnName);
   }
 
-  /**
-   * Remove a dynamic column default.
-   */
   removeColumnDefault(columnName: string): void {
+    this._state.update(s => {
+      const characteristicChoices = { ...(s.characteristicChoices || {}) };
+      delete characteristicChoices[columnName];
+      return syncLegacyFieldsFromChoices({
+        ...s,
+        characteristicChoices,
+        dynamicColumnDefaults: s.dynamicColumnDefaults.filter(d => d.columnName !== columnName),
+      });
+    });
+  }
+
+  clearColumnDefaults(): void {
+    this._state.update(s =>
+      syncLegacyFieldsFromChoices({
+        ...s,
+        characteristicChoices: {},
+        dynamicColumnDefaults: [],
+      })
+    );
+  }
+
+  /**
+   * Sync sample.characteristicValues from choice lists when entering Step3.
+   */
+  syncCharacteristicAssignments(): void {
+    this._state.update(s => {
+      const choices = s.characteristicChoices || {};
+      const samples = s.samples.map(sample => {
+        const values = { ...(sample.characteristicValues || {}) };
+        for (const [columnName, list] of Object.entries(choices)) {
+          if (list.length === 1) {
+            values[columnName] = list[0].value;
+          } else if (list.length === 0) {
+            delete values[columnName];
+          } else if (values[columnName] && !list.some(c => choiceValuesEqual(c.value, values[columnName]))) {
+            delete values[columnName];
+          }
+        }
+        // Drop assignments for columns no longer in choices map
+        for (const key of Object.keys(values)) {
+          if (!(key in choices) || (choices[key] || []).length === 0) {
+            delete values[key];
+          }
+        }
+        return { ...sample, characteristicValues: values };
+      });
+      return { ...s, samples };
+    });
+  }
+
+  setSampleCharacteristicValue(
+    sampleIndex: number,
+    columnName: string,
+    value: string
+  ): void {
+    this._state.update(s => {
+      const samples = [...s.samples];
+      if (sampleIndex < 0 || sampleIndex >= samples.length) return s;
+      const sample = { ...samples[sampleIndex] };
+      const characteristicValues = { ...(sample.characteristicValues || {}) };
+      if (!value.trim()) delete characteristicValues[columnName];
+      else characteristicValues[columnName] = value.trim();
+      sample.characteristicValues = characteristicValues;
+      samples[sampleIndex] = sample;
+      return { ...s, samples };
+    });
+  }
+
+  /** Round-robin assign candidates to all samples for a column. */
+  applyRoundRobin(columnName: string): void {
+    const list = this.getChoices(columnName);
+    if (list.length === 0) return;
     this._state.update(s => ({
       ...s,
-      dynamicColumnDefaults: s.dynamicColumnDefaults.filter(d => d.columnName !== columnName),
+      samples: s.samples.map((sample, i) => ({
+        ...sample,
+        characteristicValues: {
+          ...(sample.characteristicValues || {}),
+          [columnName]: list[i % list.length].value,
+        },
+      })),
+    }));
+  }
+
+  /** Fill groups of N consecutive samples with the same candidate, cycling. */
+  applyFillGroups(columnName: string, groupSize: number): void {
+    const list = this.getChoices(columnName);
+    const n = Math.max(1, Math.floor(groupSize) || 1);
+    if (list.length === 0) return;
+    this._state.update(s => ({
+      ...s,
+      samples: s.samples.map((sample, i) => ({
+        ...sample,
+        characteristicValues: {
+          ...(sample.characteristicValues || {}),
+          [columnName]: list[Math.floor(i / n) % list.length].value,
+        },
+      })),
+    }));
+  }
+
+  /** Set a value on selected sample indices. */
+  applyToSelectedRows(
+    columnName: string,
+    value: string,
+    sampleIndices: number[]
+  ): void {
+    if (!value.trim() || sampleIndices.length === 0) return;
+    const set = new Set(sampleIndices);
+    this._state.update(s => ({
+      ...s,
+      samples: s.samples.map((sample, i) => {
+        if (!set.has(i)) return sample;
+        return {
+          ...sample,
+          characteristicValues: {
+            ...(sample.characteristicValues || {}),
+            [columnName]: value.trim(),
+          },
+        };
+      }),
     }));
   }
 
   /**
-   * Clear all dynamic column defaults.
+   * Paste mapping for a column.
+   * Accepts lines of `value` (by row order) or `sourceName\\tvalue`.
    */
-  clearColumnDefaults(): void {
-    this._state.update(s => ({ ...s, dynamicColumnDefaults: [] }));
+  applyPasteMapping(columnName: string, text: string): void {
+    const lines = text
+      .split(/\r?\n/)
+      .map(l => l.trim())
+      .filter(Boolean);
+    if (lines.length === 0) return;
+
+    const named = lines.every(l => l.includes('\t'));
+    this._state.update(s => {
+      const samples = s.samples.map(sample => ({ ...sample }));
+      if (named) {
+        const map = new Map<string, string>();
+        for (const line of lines) {
+          const [name, ...rest] = line.split('\t');
+          map.set(name.trim(), rest.join('\t').trim());
+        }
+        for (let i = 0; i < samples.length; i++) {
+          const v = map.get(samples[i].sourceName);
+          if (v == null || !v) continue;
+          samples[i] = {
+            ...samples[i],
+            characteristicValues: {
+              ...(samples[i].characteristicValues || {}),
+              [columnName]: v,
+            },
+          };
+        }
+      } else {
+        for (let i = 0; i < Math.min(lines.length, samples.length); i++) {
+          samples[i] = {
+            ...samples[i],
+            characteristicValues: {
+              ...(samples[i].characteristicValues || {}),
+              [columnName]: lines[i],
+            },
+          };
+        }
+      }
+      return { ...s, samples };
+    });
+  }
+
+  /** Materialize choices into specialty fields then return a snapshot for generation. */
+  getStateForGeneration(): WizardState {
+    this.syncCharacteristicAssignments();
+    const materialized = materializeSampleFieldsFromChoices(this._state());
+    this._state.set(materialized);
+    return materialized;
   }
 
   // ============ Template Type Helpers ============
 
-  /** Check if current template is human */
-  readonly isHumanTemplate = computed(() => isHumanTemplate(this._state().template));
+  readonly isHumanTemplate = computed(() => isHumanTemplate(getSampleTemplateId(this._state())));
 
-  /** Check if current template is cell line */
-  readonly isCellLineTemplate = computed(() => isCellLineTemplate(this._state().template));
+  readonly isCellLineTemplate = computed(() => hasCellLinesExperiment(this._state()));
 
-  /** Check if current template is vertebrate */
-  readonly isVertebrateTemplate = computed(() => isVertebrateTemplate(this._state().template));
+  readonly isVertebrateTemplate = computed(() => isVertebrateTemplate(getSampleTemplateId(this._state())));
 
-  /** Check if current template is invertebrate */
-  readonly isInvertebrateTemplate = computed(() => isInvertebrateTemplate(this._state().template));
+  readonly isInvertebrateTemplate = computed(() => isInvertebrateTemplate(getSampleTemplateId(this._state())));
 
-  /** Check if current template is plant */
-  readonly isPlantTemplate = computed(() => isPlantTemplate(this._state().template));
+  readonly isPlantTemplate = computed(() => isPlantTemplate(getSampleTemplateId(this._state())));
 
-  /** Check if current template needs strain/breed and developmental stage fields */
   readonly needsStrainAndDevelopmentalStage = computed(() =>
-    isVertebrateTemplate(this._state().template) ||
-    isInvertebrateTemplate(this._state().template) ||
-    isPlantTemplate(this._state().template)
+    isVertebrateTemplate(getSampleTemplateId(this._state())) ||
+    isInvertebrateTemplate(getSampleTemplateId(this._state())) ||
+    isPlantTemplate(getSampleTemplateId(this._state()))
+  );
+
+  /** Whether disease/organism part must be ontology terms (human) vs reserved allowed */
+  readonly requiresStrictCharacteristics = computed(() =>
+    isHumanTemplate(getSampleTemplateId(this._state()))
   );
 
   // ============ Step 3: Sample Values ============
 
-  /**
-   * Update a specific sample.
-   */
   updateSample(index: number, updates: Partial<WizardSampleEntry>): void {
     this._state.update(s => {
       const samples = [...s.samples];
@@ -377,16 +855,24 @@ export class WizardStateService {
     });
   }
 
-  /**
-   * Set all samples at once.
-   */
+  setSampleCustomCharacteristic(sampleIndex: number, columnName: string, value: string): void {
+    this._state.update(s => {
+      const samples = [...s.samples];
+      if (sampleIndex < 0 || sampleIndex >= samples.length) return s;
+      const sample = { ...samples[sampleIndex] };
+      const custom = { ...(sample.customCharacteristics || {}) };
+      if (!value.trim()) delete custom[columnName];
+      else custom[columnName] = value;
+      sample.customCharacteristics = custom;
+      samples[sampleIndex] = sample;
+      return { ...s, samples };
+    });
+  }
+
   setSamples(samples: WizardSampleEntry[]): void {
     this._state.update(s => ({ ...s, samples, sampleCount: samples.length }));
   }
 
-  /**
-   * Add a new sample at the end.
-   */
   addSample(): void {
     this._state.update(s => {
       const newIndex = s.samples.length > 0
@@ -397,20 +883,14 @@ export class WizardStateService {
     });
   }
 
-  /**
-   * Remove a sample by array index.
-   */
   removeSample(index: number): void {
     this._state.update(s => {
-      if (s.samples.length <= 1) return s; // Keep at least one sample
+      if (s.samples.length <= 1) return s;
       const samples = s.samples.filter((_, i) => i !== index);
       return { ...s, samples, sampleCount: samples.length };
     });
   }
 
-  /**
-   * Auto-generate source names with a pattern.
-   */
   autoGenerateSourceNames(pattern: string = 'sample_{n}'): void {
     this._state.update(s => {
       const samples = s.samples.map((sample, i) => ({
@@ -421,9 +901,6 @@ export class WizardStateService {
     });
   }
 
-  /**
-   * Copy a value from first sample to all samples.
-   */
   copyToAllSamples(field: keyof WizardSampleEntry): void {
     this._state.update(s => {
       if (s.samples.length === 0) return s;
@@ -439,22 +916,91 @@ export class WizardStateService {
   // ============ Step 4: Technical Configuration ============
 
   /**
-   * Set the label configuration.
+   * Set default kit for new runs / Auto-pack.
+   * Does not remap existing runs (use applyDefaultKitToAllRuns or setRunLabelConfig).
    */
   setLabelConfig(configId: string): void {
-    this._state.update(s => ({ ...s, labelConfigId: configId }));
+    this._state.update(s => ({
+      ...s,
+      labelConfigId: configId,
+      customLabels: [],
+      msRuns: normalizeMsRunKits(s.msRuns || [], configId),
+    }));
   }
 
-  /**
-   * Set custom labels.
-   */
+  /** Apply default kit to every run (rebuilds channel widths). */
+  applyDefaultKitToAllRuns(): void {
+    this._state.update(s => {
+      const labels = resolveWizardLabels(s);
+      return {
+        ...s,
+        msRuns: remapRunsToLabels(
+          s.msRuns || [],
+          labels,
+          s.samples,
+          s.labelConfigId || 'lf'
+        ),
+      };
+    });
+  }
+
+  /** Change kit for one run and remap its channels. */
+  setRunLabelConfig(runId: string, configId: string): void {
+    this._state.update(s => {
+      const labels =
+        configId === 'lf'
+          ? ['label free sample']
+          : LABEL_CONFIGS.find(c => c.id === configId)?.labels || [];
+      if (labels.length === 0) return s;
+      return {
+        ...s,
+        msRuns: (s.msRuns || []).map(run =>
+          run.id === runId
+            ? remapSingleRunToLabels(run, labels, configId)
+            : run.labelConfigId
+              ? run
+              : { ...run, labelConfigId: s.labelConfigId || 'lf' }
+        ),
+      };
+    });
+  }
+
+  /** Samples involved in this MS run; channel mapping is limited to this subset. */
+  setRunSampleIndices(runId: string, sampleIndices: number[]): void {
+    this._state.update(s => {
+      const allowed = [...new Set(sampleIndices)]
+        .filter(i => s.samples.some(sample => sample.index === i))
+        .sort((a, b) => a - b);
+      return {
+        ...s,
+        msRuns: (s.msRuns || []).map(run => {
+          if (run.id !== runId) return run;
+          return {
+            ...run,
+            sampleIndices: allowed,
+            channels: pruneChannelsToSamples(run.channels, allowed),
+          };
+        }),
+      };
+    });
+  }
+
   setCustomLabels(labels: string[]): void {
-    this._state.update(s => ({ ...s, customLabels: labels }));
+    this._state.update(s => {
+      const next = { ...s, customLabels: labels };
+      const resolved = resolveWizardLabels(next);
+      return {
+        ...next,
+        msRuns: remapRunsToLabels(
+          s.msRuns || [],
+          resolved,
+          s.samples,
+          next.labelConfigId || 'lf'
+        ),
+      };
+    });
   }
 
-  /**
-   * Set whether fractionation is used.
-   */
   setHasFractions(hasFractions: boolean): void {
     this._state.update(s => ({
       ...s,
@@ -463,19 +1009,14 @@ export class WizardStateService {
     }));
   }
 
-  /**
-   * Set the number of fractions.
-   */
   setFractionCount(count: number): void {
     this._state.update(s => ({
       ...s,
       fractionCount: Math.max(1, Math.floor(count)),
+      hasFractions: Math.floor(count) > 1 ? true : s.hasFractions,
     }));
   }
 
-  /**
-   * Set the number of technical replicates.
-   */
   setTechnicalReplicates(count: number): void {
     this._state.update(s => ({
       ...s,
@@ -483,32 +1024,114 @@ export class WizardStateService {
     }));
   }
 
-  /**
-   * Set the data acquisition method.
-   */
-  setAcquisitionMethod(method: 'dda' | 'dia'): void {
+  setAcquisitionMethod(method: 'dda' | 'dia' | 'prm' | 'srm'): void {
     this._state.update(s => ({ ...s, acquisitionMethod: method }));
+  }
+
+  autoPackSamplesIntoRuns(): void {
+    this._state.update(s => {
+      const labels = resolveWizardLabels(s);
+      const kitId = s.labelConfigId || 'lf';
+      return {
+        ...s,
+        msRuns: packSamplesIntoRuns(
+          s.samples,
+          labels,
+          (s.msRuns || []).map(r => r.name),
+          kitId
+        ),
+      };
+    });
+  }
+
+  addMsRun(): void {
+    this._state.update(s => {
+      const labels = resolveWizardLabels(s);
+      if (labels.length === 0) return s;
+      const kitId = s.labelConfigId || 'lf';
+      const runs = normalizeMsRunKits(s.msRuns || [], kitId);
+      runs.push({
+        id: `run_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+        name: `Run ${runs.length + 1}`,
+        labelConfigId: kitId,
+        sampleIndices: s.samples.map(sample => sample.index),
+        channels: createEmptyChannelsForLabels(labels),
+      });
+      return { ...s, msRuns: runs };
+    });
+  }
+
+  removeMsRun(runId: string): void {
+    this._state.update(s => {
+      const runs = (s.msRuns || []).filter(r => r.id !== runId);
+      // Keep files; return them to the unassigned pool
+      const dataFiles = s.dataFiles.map(f => {
+        if (f.runId !== runId) return f;
+        const { runId: _drop, ...rest } = f;
+        return rest;
+      });
+      return { ...s, msRuns: runs, dataFiles };
+    });
+  }
+
+  renameMsRun(runId: string, name: string): void {
+    this._state.update(s => ({
+      ...s,
+      msRuns: (s.msRuns || []).map(r =>
+        r.id === runId ? { ...r, name: name.trim() || r.name } : r
+      ),
+    }));
+  }
+
+  setChannelAssignment(
+    runId: string,
+    channelIndex: number,
+    patch: Partial<WizardChannelAssignment>
+  ): void {
+    this._state.update(s => ({
+      ...s,
+      msRuns: (s.msRuns || []).map(run => {
+        if (run.id !== runId) return run;
+        const channels = run.channels.map((ch, i) => {
+          if (i !== channelIndex) return ch;
+          const next = { ...ch, ...patch };
+          if (next.role === 'empty') {
+            delete next.sampleIndex;
+            delete next.pooledSampleIndices;
+            delete next.sourceNameOverride;
+          }
+          if (next.role === 'sample') {
+            delete next.pooledSampleIndices;
+            delete next.sourceNameOverride;
+          }
+          if (next.role === 'pooled') {
+            delete next.sampleIndex;
+            if (!next.pooledSampleIndices) next.pooledSampleIndices = [];
+          }
+          return next;
+        });
+        return { ...run, channels };
+      }),
+    }));
+  }
+
+  setMsRuns(msRuns: WizardMsRun[]): void {
+    this._state.update(s => ({
+      ...s,
+      msRuns: normalizeMsRunKits(msRuns, s.labelConfigId || 'lf'),
+    }));
   }
 
   // ============ Step 5: Instrument & Protocol ============
 
-  /**
-   * Set the instrument.
-   */
   setInstrument(instrument: OntologyTerm): void {
     this._state.update(s => ({ ...s, instrument }));
   }
 
-  /**
-   * Set the cleavage agent.
-   */
   setCleavageAgent(cleavageAgent: WizardCleavageAgent): void {
     this._state.update(s => ({ ...s, cleavageAgent }));
   }
 
-  /**
-   * Add a modification.
-   */
   addModification(modification: WizardModification): void {
     this._state.update(s => ({
       ...s,
@@ -516,9 +1139,6 @@ export class WizardStateService {
     }));
   }
 
-  /**
-   * Remove a modification.
-   */
   removeModification(index: number): void {
     this._state.update(s => ({
       ...s,
@@ -526,102 +1146,511 @@ export class WizardStateService {
     }));
   }
 
-  /**
-   * Set all modifications.
-   */
   setModifications(modifications: WizardModification[]): void {
     this._state.update(s => ({ ...s, modifications }));
   }
 
+  addSuggestedPlexModifications(): void {
+    const state = this._state();
+    const kitIds = collectUsedPlexKitIds(state);
+    const suggested: WizardModification[] = [];
+    const seenFamilies = new Set<string>();
+
+    for (const id of kitIds) {
+      let family = '';
+      let mods: WizardModification[] = [];
+      if (id.startsWith('tmt16') || id.startsWith('tmt18') || id === 'tmt11' || id === 'tmt10') {
+        family = 'TMTpro';
+        mods = [
+          {
+            name: 'TMTpro',
+            targetAminoAcids: 'K',
+            type: 'fixed',
+            position: 'Anywhere',
+            unimodAccession: 'UNIMOD:2016',
+            deltaMass: 304.207146,
+          },
+          {
+            name: 'TMTpro',
+            targetAminoAcids: 'N-term',
+            type: 'fixed',
+            position: 'Any N-term',
+            unimodAccession: 'UNIMOD:2016',
+            deltaMass: 304.207146,
+          },
+        ];
+      } else if (id.startsWith('tmt')) {
+        family = 'TMT6plex';
+        mods = [
+          {
+            name: 'TMT6plex',
+            targetAminoAcids: 'K',
+            type: 'fixed',
+            position: 'Anywhere',
+            unimodAccession: 'UNIMOD:737',
+            deltaMass: 229.162932,
+          },
+          {
+            name: 'TMT6plex',
+            targetAminoAcids: 'N-term',
+            type: 'fixed',
+            position: 'Any N-term',
+            unimodAccession: 'UNIMOD:737',
+            deltaMass: 229.162932,
+          },
+        ];
+      } else if (id.startsWith('itraq4')) {
+        family = 'iTRAQ4plex';
+        mods = [
+          {
+            name: 'iTRAQ4plex',
+            targetAminoAcids: 'K',
+            type: 'fixed',
+            position: 'Anywhere',
+            unimodAccession: 'UNIMOD:214',
+            deltaMass: 144.102063,
+          },
+          {
+            name: 'iTRAQ4plex',
+            targetAminoAcids: 'N-term',
+            type: 'fixed',
+            position: 'Any N-term',
+            unimodAccession: 'UNIMOD:214',
+            deltaMass: 144.102063,
+          },
+        ];
+      } else if (id.startsWith('itraq')) {
+        family = 'iTRAQ8plex';
+        mods = [
+          {
+            name: 'iTRAQ8plex',
+            targetAminoAcids: 'K',
+            type: 'fixed',
+            position: 'Anywhere',
+            unimodAccession: 'UNIMOD:730',
+            deltaMass: 304.20536,
+          },
+          {
+            name: 'iTRAQ8plex',
+            targetAminoAcids: 'N-term',
+            type: 'fixed',
+            position: 'Any N-term',
+            unimodAccession: 'UNIMOD:730',
+            deltaMass: 304.20536,
+          },
+        ];
+      }
+      if (!family || seenFamilies.has(family)) continue;
+      seenFamilies.add(family);
+      suggested.push(...mods);
+    }
+
+    if (suggested.length === 0) return;
+
+    this._state.update(s => {
+      const existing = s.modifications;
+      const toAdd = suggested.filter(
+        mod =>
+          !existing.some(
+            e =>
+              e.name === mod.name &&
+              e.targetAminoAcids === mod.targetAminoAcids &&
+              e.position === mod.position
+          )
+      );
+      if (toAdd.length === 0) return s;
+      return { ...s, modifications: [...existing, ...toAdd] };
+    });
+  }
+
   // ============ Step 6: Data Files ============
 
-  /**
-   * Set the file naming pattern.
-   */
   setFileNamingPattern(pattern: string): void {
     this._state.update(s => ({ ...s, fileNamingPattern: pattern }));
   }
 
-  /**
-   * Set data files.
-   */
   setDataFiles(dataFiles: WizardDataFile[]): void {
     this._state.update(s => ({ ...s, dataFiles }));
   }
 
+  updateDataFile(index: number, patch: Partial<WizardDataFile>): void {
+    this._state.update(s => {
+      if (index < 0 || index >= s.dataFiles.length) return s;
+      const dataFiles = s.dataFiles.map((f, i) =>
+        i === index ? { ...f, ...patch } : f
+      );
+      return { ...s, dataFiles };
+    });
+  }
+
+  /** Add filenames to the unassigned pool (no runId). */
+  addUnassignedFileNames(names: string[]): void {
+    const cleaned = names.map(n => n.trim()).filter(Boolean);
+    if (cleaned.length === 0) return;
+    this._state.update(s => {
+      const added: WizardDataFile[] = cleaned.map(fileName => {
+        const parsed = parseFractionTechFromName(fileName);
+        return {
+          fileName,
+          fractionId: parsed.fractionId,
+          technicalReplicate: parsed.technicalReplicate,
+        };
+      });
+      return { ...s, dataFiles: [...s.dataFiles, ...added] };
+    });
+  }
+
+  /** Replace all files with unassigned pool entries (PXD / paste replace). */
+  replaceWithUnassignedFileNames(names: string[]): void {
+    const cleaned = names.map(n => n.trim()).filter(Boolean);
+    this._state.update(s => ({
+      ...s,
+      dataFiles: cleaned.map(fileName => {
+        const parsed = parseFractionTechFromName(fileName);
+        return {
+          fileName,
+          fractionId: parsed.fractionId,
+          technicalReplicate: parsed.technicalReplicate,
+        };
+      }),
+    }));
+  }
+
+  assignDataFilesToRun(indices: number[], runId: string): void {
+    const set = new Set(indices);
+    this._state.update(s => ({
+      ...s,
+      dataFiles: s.dataFiles.map((f, i) =>
+        set.has(i) ? { ...f, runId } : f
+      ),
+    }));
+  }
+
   /**
-   * Auto-generate data files based on current configuration.
+   * Assign files to runs by exact file name, optionally setting fraction / tech.
+   * Used by AI recommendation cards (`assignFilesToRunsByName`).
    */
-  autoGenerateDataFiles(): void {
-    const state = this._state();
-    const files: WizardDataFile[] = [];
-    const pattern = state.fileNamingPattern || '{sourceName}.raw';
-    const labelConfig = LABEL_CONFIGS.find(c => c.id === state.labelConfigId);
-    const labels = state.customLabels.length > 0
-      ? state.customLabels
-      : labelConfig?.labels || ['label free sample'];
+  assignDataFilesToRunsByName(
+    assignments: Array<{
+      runId: string;
+      files: Array<{ fileName: string; fractionId: number; technicalReplicate: number }>;
+    }>
+  ): void {
+    if (!assignments.length) return;
 
-    for (const sample of state.samples) {
-      for (let f = 1; f <= (state.hasFractions ? state.fractionCount : 1); f++) {
-        for (let r = 1; r <= state.technicalReplicates; r++) {
-          // For label-free, one file per sample/fraction/replicate
-          // For multiplexed, samples share the same file
-          if (labelConfig?.id === 'lf') {
-            const fileName = pattern
-              .replace('{sourceName}', sample.sourceName)
-              .replace('{fraction}', `F${f}`)
-              .replace('{replicate}', `R${r}`)
-              .replace('{n}', String(sample.index));
-
-            files.push({
-              fileName,
-              sampleIndex: sample.index,
-              fractionId: state.hasFractions ? f : undefined,
-              technicalReplicate: state.technicalReplicates > 1 ? r : undefined,
-              label: 'label free sample',
-            });
-          } else {
-            // For multiplexed, generate one file per label per fraction/replicate
-            for (const label of labels) {
-              const fileName = pattern
-                .replace('{sourceName}', sample.sourceName)
-                .replace('{fraction}', `F${f}`)
-                .replace('{replicate}', `R${r}`)
-                .replace('{label}', label)
-                .replace('{n}', String(sample.index));
-
-              files.push({
-                fileName,
-                sampleIndex: sample.index,
-                fractionId: state.hasFractions ? f : undefined,
-                technicalReplicate: state.technicalReplicates > 1 ? r : undefined,
-                label,
-              });
-            }
-          }
-        }
+    const byName = new Map<
+      string,
+      { runId: string; fractionId: number; technicalReplicate: number }
+    >();
+    for (const group of assignments) {
+      for (const file of group.files) {
+        const key = file.fileName.trim();
+        if (!key) continue;
+        byName.set(key, {
+          runId: group.runId,
+          fractionId: Math.max(1, Math.floor(file.fractionId) || 1),
+          technicalReplicate: Math.max(1, Math.floor(file.technicalReplicate) || 1),
+        });
       }
     }
 
-    this._state.update(s => ({ ...s, dataFiles: files }));
+    this._state.update(s => ({
+      ...s,
+      dataFiles: s.dataFiles.map(f => {
+        const hit = byName.get((f.fileName || '').trim());
+        if (!hit) return f;
+        return {
+          ...f,
+          runId: hit.runId,
+          fractionId: hit.fractionId,
+          technicalReplicate: hit.technicalReplicate,
+        };
+      }),
+    }));
+  }
+
+  unassignDataFiles(indices: number[]): void {
+    const set = new Set(indices);
+    this._state.update(s => ({
+      ...s,
+      dataFiles: s.dataFiles.map((f, i) => {
+        if (!set.has(i)) return f;
+        const { runId: _r, ...rest } = f;
+        return rest;
+      }),
+    }));
+  }
+
+  removeDataFile(index: number): void {
+    this._state.update(s => ({
+      ...s,
+      dataFiles: s.dataFiles.filter((_, i) => i !== index),
+    }));
+  }
+
+  /** Generate file slots from planner (one file per run×F×T). */
+  generateFileSlotsFromPlanner(): void {
+    this._state.update(s => {
+      let state = s;
+      if (!s.msRuns || s.msRuns.length === 0) {
+        const labels = resolveWizardLabels(s);
+        const kitId = s.labelConfigId || 'lf';
+        state = {
+          ...s,
+          msRuns: packSamplesIntoRuns(s.samples, labels, undefined, kitId),
+        };
+      } else {
+        state = {
+          ...s,
+          msRuns: normalizeMsRunKits(s.msRuns, s.labelConfigId || 'lf'),
+        };
+      }
+      return { ...state, dataFiles: buildPlannerFileSlots(state) };
+    });
+  }
+
+  /** @deprecated Use generateFileSlotsFromPlanner */
+  autoGenerateDataFiles(): void {
+    this.generateFileSlotsFromPlanner();
+  }
+
+  // ============ Factors (defined on Step 2, assigned per sample on Step 3) ============
+
+  ensureDefaultFactors(): void {
+    this._state.update(s => {
+      const diseaseChoice = (s.characteristicChoices?.['characteristics[disease]'] || [])[0]?.value;
+      const diseaseValue =
+        diseaseChoice ||
+        (typeof s.disease === 'string' ? s.disease : s.disease?.label?.toLowerCase()) ||
+        '';
+
+      if (!s.factors.length) {
+        return { ...s, factors: [createDefaultDiseaseFactor(diseaseValue)] };
+      }
+
+      const factors = s.factors.map(normalizeFactor).map(f => {
+        if (
+          f.name.toLowerCase() === 'disease' &&
+          f.values.length === 0 &&
+          diseaseValue.trim()
+        ) {
+          return { ...f, values: [diseaseValue.trim()] };
+        }
+        return f;
+      });
+      return { ...s, factors };
+    });
+  }
+
+  setFactors(factors: WizardFactor[]): void {
+    this._state.update(s => ({
+      ...s,
+      factors: factors.map(normalizeFactor).filter(f => f.name.trim()),
+    }));
+  }
+
+  addFactor(factor: WizardFactor): void {
+    const next = normalizeFactor(factor);
+    this._state.update(s => ({
+      ...s,
+      factors: [...s.factors.map(normalizeFactor), next],
+    }));
+  }
+
+  updateFactor(index: number, updates: Partial<WizardFactor>): void {
+    this._state.update(s => {
+      const factors = s.factors.map(normalizeFactor);
+      if (index >= 0 && index < factors.length) {
+        factors[index] = normalizeFactor({ ...factors[index], ...updates });
+      }
+      return { ...s, factors };
+    });
+  }
+
+  removeFactor(index: number): void {
+    this._state.update(s => {
+      const factors = s.factors.map(normalizeFactor).filter((_, i) => i !== index);
+      return {
+        ...s,
+        factors: factors.length > 0 ? factors : [createDefaultDiseaseFactor()],
+      };
+    });
+  }
+
+  toggleFactor(index: number, enabled: boolean): void {
+    this.updateFactor(index, { enabled });
+  }
+
+  addFactorValue(index: number, value: string): void {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    this._state.update(s => {
+      const factors = s.factors.map(normalizeFactor);
+      if (index < 0 || index >= factors.length) return s;
+      const current = factors[index];
+      if (current.values.some(v => choiceValuesEqual(v, trimmed))) return s;
+      factors[index] = { ...current, values: [...current.values, trimmed] };
+      return { ...s, factors };
+    });
+  }
+
+  /** Append a candidate by factor name (AI / bridge). */
+  addFactorValueByName(factorName: string, value: string): void {
+    const trimmedName = factorName.trim();
+    const trimmed = value.trim();
+    if (!trimmedName || !trimmed) return;
+    this._state.update(s => {
+      const factors = s.factors.map(normalizeFactor);
+      const index = factors.findIndex(f => f.name.toLowerCase() === trimmedName.toLowerCase());
+      if (index < 0) {
+        return {
+          ...s,
+          factors: [...factors, { name: trimmedName, enabled: true, values: [trimmed] }],
+        };
+      }
+      const current = factors[index];
+      if (current.values.some(v => choiceValuesEqual(v, trimmed))) return s;
+      factors[index] = { ...current, values: [...current.values, trimmed] };
+      return { ...s, factors };
+    });
+  }
+
+  removeFactorValue(index: number, value: string): void {
+    this._state.update(s => {
+      const factors = s.factors.map(normalizeFactor);
+      if (index < 0 || index >= factors.length) return s;
+      factors[index] = {
+        ...factors[index],
+        values: factors[index].values.filter(v => !choiceValuesEqual(v, value)),
+      };
+      return { ...s, factors };
+    });
+  }
+
+  /**
+   * Sync sample.factorValues from factor candidate lists when entering Step 3.
+   */
+  syncFactorAssignments(): void {
+    this._state.update(s => {
+      const factors = s.factors.map(normalizeFactor).filter(f => f.enabled && f.name.trim());
+      const samples = s.samples.map(sample => {
+        const values = { ...(sample.factorValues || {}) };
+        for (const factor of factors) {
+          const list = factor.values || [];
+          if (list.length === 1) {
+            values[factor.name] = list[0];
+          } else if (list.length === 0) {
+            delete values[factor.name];
+          } else if (
+            values[factor.name] &&
+            !list.some(v => choiceValuesEqual(v, values[factor.name]))
+          ) {
+            delete values[factor.name];
+          }
+        }
+        for (const key of Object.keys(values)) {
+          if (!factors.some(f => f.name === key)) delete values[key];
+        }
+        return { ...sample, factorValues: values };
+      });
+      return { ...s, samples };
+    });
+  }
+
+  setSampleFactorValue(sampleIndex: number, factorName: string, value: string): void {
+    const name = factorName.trim();
+    if (!name) return;
+    this._state.update(s => {
+      const samples = [...s.samples];
+      if (sampleIndex < 0 || sampleIndex >= samples.length) return s;
+      const sample = { ...samples[sampleIndex] };
+      const factorValues = { ...(sample.factorValues || {}) };
+      if (!value.trim()) delete factorValues[name];
+      else factorValues[name] = value.trim();
+      sample.factorValues = factorValues;
+      samples[sampleIndex] = sample;
+      return { ...s, samples };
+    });
+  }
+
+  /**
+   * Assign an entire factor column in sample order (length must match sample count).
+   * Used by AI one-click mapping cards.
+   */
+  setFactorColumnValues(factorName: string, values: string[]): void {
+    const name = factorName.trim();
+    if (!name) return;
+    this._state.update(s => {
+      if (values.length !== s.samples.length) {
+        return s;
+      }
+      const allowed = new Set(
+        (s.factors.map(normalizeFactor).find(f => f.name === name)?.values || []).map(v =>
+          v.trim().toLowerCase()
+        )
+      );
+      const samples = s.samples.map((sample, i) => {
+        const raw = (values[i] || '').trim();
+        const factorValues = { ...(sample.factorValues || {}) };
+        if (!raw) {
+          delete factorValues[name];
+        } else if (allowed.size === 0 || allowed.has(raw.toLowerCase())) {
+          factorValues[name] = raw;
+        } else {
+          // Still set — AI may propose before candidates are fully synced
+          factorValues[name] = raw;
+        }
+        return { ...sample, factorValues };
+      });
+      return { ...s, samples };
+    });
+  }
+
+  enabledFactors(): WizardFactor[] {
+    return this._state()
+      .factors.map(normalizeFactor)
+      .filter(f => f.enabled && f.name.trim());
   }
 
   // ============ Reset ============
 
-  /**
-   * Reset the wizard to initial state.
-   */
   reset(): void {
     this._state.set(createEmptyWizardState());
     this._currentStep.set(0);
   }
 
+  /**
+   * Restore a previously persisted wizard form (chat history / accidental leave).
+   * Merges onto an empty baseline so older snapshots missing new fields still work.
+   */
+  hydrate(state: WizardState, step = 0): void {
+    const baseline = createEmptyWizardState();
+    const factors = (state.factors?.length ? state.factors : baseline.factors).map(normalizeFactor);
+    const samples = (state.samples?.length ? state.samples : baseline.samples).map(sample => ({
+      ...sample,
+      factorValues: sample.factorValues || {},
+    }));
+    const next: WizardState = {
+      ...baseline,
+      ...state,
+      characteristicChoices: state.characteristicChoices || {},
+      characteristicColumns: state.characteristicColumns || [],
+      experimentTemplates: state.experimentTemplates || [],
+      samples,
+      msRuns: state.msRuns?.length ? state.msRuns : baseline.msRuns,
+      dataFiles: state.dataFiles || [],
+      modifications: state.modifications || [],
+      factors,
+      dynamicColumnDefaults: state.dynamicColumnDefaults || [],
+      customLabels: state.customLabels || [],
+    };
+    this._state.set(next);
+    const maxStep = Math.max(0, WIZARD_STEPS.length - 1);
+    this._currentStep.set(Math.min(Math.max(0, Math.floor(step) || 0), maxStep));
+  }
+
   // ============ Helpers ============
 
-  /**
-   * Ensure samples array is populated to match sampleCount.
-   * Call this when reaching step 3 to handle edge cases.
-   */
   ensureSamplesInitialized(): void {
     this._state.update(s => {
       if (s.samples.length >= s.sampleCount) return s;
@@ -633,10 +1662,11 @@ export class WizardStateService {
     });
   }
 
-  /**
-   * Get the complete state (for generator service).
-   */
   getState(): WizardState {
     return this._state();
+  }
+
+  isReservedCharacteristicValue(value: string): boolean {
+    return RESERVED_VALUE_PATTERN.test(value.trim());
   }
 }

@@ -1,7 +1,7 @@
 /**
  * Experiment Setup Component (Step 1)
  *
- * Template selection and sample count configuration.
+ * Layered template selection: technology + sample + experiment(s).
  */
 
 import {
@@ -19,34 +19,33 @@ import { FormsModule } from '@angular/forms';
 import { WizardStateService } from '../../../core/services/wizard-state.service';
 import { TemplateService } from '../../../core/services/template.service';
 import { WIZARD_TEMPLATES, WizardTemplate } from '../../../core/models/wizard';
-import { TemplateInfo as DynamicTemplateInfo } from '../../../core/models/template';
+import { TemplateInfo, isDevelopmentTemplate, getTemplateEmoji, getTemplateShortDescription, getTemplateSortOrder } from '../../../core/models/template';
+import { TemplateColumnsPreviewComponent } from '../template-columns-preview.component';
 
 @Component({
   selector: 'wizard-experiment-setup',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, TemplateColumnsPreviewComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="step-container">
       <div class="step-header">
         <h3>What type of experiment is this?</h3>
         <p class="step-description">
-          Select the template that best describes your samples. This will determine
-          which metadata fields are required.
+          Choose templates by layer: <strong>technology</strong> (required),
+          <strong>sample</strong> (recommended), and optional <strong>experiment</strong> add-ons.
+          Defaults are human + MS proteomics. Use <strong>Columns</strong> on a card to see required fields.
         </p>
       </div>
 
-      <!-- Template System Info -->
       <div class="info-banner" (click)="toggleTemplateInfo()">
         <span class="info-icon">i</span>
         <div class="info-content">
           <strong>SDRF Template System</strong>
           <p>
-            Templates define required metadata columns for your experiment type.
-            Choose from <span class="layer-badge layer-sample">Sample</span> templates for organism-specific fields
-            or <span class="layer-badge layer-technology">Technology</span> templates for MS-specific fields.
+            Templates follow the official layered architecture.
             @if (showTemplateInfo()) {
-              <a class="info-link" href="https://github.com/bigbio/proteomics-metadata-standard/tree/master/sdrf-proteomics" target="_blank" rel="noopener">View SDRF specification</a>
+              <a class="info-link" href="https://sdrf.quantms.org/specification.html" target="_blank" rel="noopener">View specification</a>
             }
           </p>
         </div>
@@ -56,67 +55,146 @@ import { TemplateInfo as DynamicTemplateInfo } from '../../../core/models/templa
       @if (showTemplateInfo()) {
         <div class="template-layers-info">
           <div class="layer-info">
-            <span class="layer-badge layer-sample">Sample</span>
-            <span class="layer-desc">Organism-specific fields (human, cell-lines, vertebrates)</span>
+            <span class="layer-badge layer-technology">Technology</span>
+            <span class="layer-desc">Required — ms-proteomics, affinity-proteomics, …</span>
           </div>
           <div class="layer-info">
-            <span class="layer-badge layer-technology">Technology</span>
-            <span class="layer-desc">Analysis method fields (MS proteomics, affinity proteomics)</span>
+            <span class="layer-badge layer-sample">Sample</span>
+            <span class="layer-desc">Organism / study context — human, vertebrates, …</span>
           </div>
           <div class="layer-info">
             <span class="layer-badge layer-experiment">Experiment</span>
-            <span class="layer-desc">Specialized workflow fields (DIA, immunopeptidomics)</span>
+            <span class="layer-desc">Optional add-ons — cell-lines, DIA, crosslinking, …</span>
           </div>
         </div>
       }
 
-      <!-- Template Cards -->
-      <div class="template-grid">
-        @for (template of templates(); track template.id) {
-          <button
-            class="template-card"
-            [class.selected]="wizardState.template() === template.id"
-            (click)="selectTemplate(template.id)"
-          >
-            <div class="template-icon">{{ getIcon(template.id) }}</div>
-            <div class="template-info">
-              <div class="template-header">
-                <h4>{{ template.name }}</h4>
-                <span class="layer-badge" [class]="'layer-' + (template.layer || 'sample')">
-                  {{ template.layer || 'sample' }}
-                </span>
+      <label class="dev-toggle">
+        <input type="checkbox" [ngModel]="showDevTemplates()" (ngModelChange)="showDevTemplates.set($event)" />
+        Show development templates (metabolomics, …)
+      </label>
+
+      <!-- Technology -->
+      <div class="template-section">
+        <h4 class="section-title">
+          <span class="layer-badge layer-technology">Technology</span>
+          Technology template <span class="required">*</span>
+        </h4>
+        <div class="template-grid">
+          @for (template of visibleTechnologyTemplates(); track template.id) {
+            <div
+              class="template-card"
+              [class.selected]="wizardState.technologyTemplate() === template.id"
+              (click)="selectTechnologyTemplate(template.id)"
+              (keydown.enter)="selectTechnologyTemplate(template.id)"
+              tabindex="0"
+              role="button"
+            >
+              <div class="template-icon">{{ getIcon(template.id) }}</div>
+              <div class="template-info">
+                <div class="template-header"><h4>{{ template.name }}</h4></div>
+                <p>{{ template.description }}</p>
               </div>
-              <p>{{ template.description }}</p>
-              @if (template.examples && template.examples.length > 0) {
-                <div class="template-examples">
-                  <span class="example-label">Examples:</span>
-                  {{ template.examples.join(', ') }}
-                </div>
-              }
+              <div class="card-actions">
+                @if (wizardState.technologyTemplate() === template.id) {
+                  <div class="selected-badge">&#10003;</div>
+                }
+                <button
+                  type="button"
+                  class="view-cols-btn"
+                  (click)="openColumnsPreview(template.id, $event)"
+                >Columns</button>
+              </div>
             </div>
-            @if (wizardState.template() === template.id) {
-              <div class="selected-badge">&#10003;</div>
-            }
-          </button>
+          }
+        </div>
+      </div>
+
+      <!-- Sample -->
+      <div class="template-section">
+        <h4 class="section-title">
+          <span class="layer-badge layer-sample">Sample</span>
+          Sample template
+          <span class="optional-hint">(recommended)</span>
+        </h4>
+        <div class="template-grid">
+          @for (template of visibleSampleTemplates(); track template.id) {
+            <div
+              class="template-card"
+              [class.selected]="wizardState.sampleTemplate() === template.id"
+              (click)="selectSampleTemplate(template.id)"
+              (keydown.enter)="selectSampleTemplate(template.id)"
+              tabindex="0"
+              role="button"
+            >
+              <div class="template-icon">{{ getIcon(template.id) }}</div>
+              <div class="template-info">
+                <div class="template-header"><h4>{{ template.name }}</h4></div>
+                <p>{{ template.description }}</p>
+              </div>
+              <div class="card-actions">
+                @if (wizardState.sampleTemplate() === template.id) {
+                  <div class="selected-badge">&#10003;</div>
+                }
+                <button
+                  type="button"
+                  class="view-cols-btn"
+                  (click)="openColumnsPreview(template.id, $event)"
+                >Columns</button>
+              </div>
+            </div>
+          }
+        </div>
+        @if (wizardState.sampleTemplate()) {
+          <button type="button" class="clear-btn" (click)="clearSampleTemplate()">Clear sample template</button>
         }
+      </div>
+
+      <!-- Experiment (multi) -->
+      <div class="template-section">
+        <h4 class="section-title">
+          <span class="layer-badge layer-experiment">Experiment</span>
+          Experiment templates
+          <span class="optional-hint">(optional, multi-select)</span>
+        </h4>
+        <div class="template-grid">
+          @for (template of visibleExperimentTemplates(); track template.id) {
+            <div
+              class="template-card"
+              [class.selected]="isExperimentSelected(template.id)"
+              (click)="toggleExperiment(template.id)"
+              (keydown.enter)="toggleExperiment(template.id)"
+              tabindex="0"
+              role="button"
+            >
+              <div class="template-icon">{{ getIcon(template.id) }}</div>
+              <div class="template-info">
+                <div class="template-header"><h4>{{ template.name }}</h4></div>
+                <p>{{ template.description }}</p>
+              </div>
+              <div class="card-actions">
+                @if (isExperimentSelected(template.id)) {
+                  <div class="selected-badge">&#10003;</div>
+                }
+                <button
+                  type="button"
+                  class="view-cols-btn"
+                  (click)="openColumnsPreview(template.id, $event)"
+                >Columns</button>
+              </div>
+            </div>
+          }
+        </div>
       </div>
 
       <!-- Sample Count -->
       <div class="form-section">
         <label class="form-label">
           How many samples do you have?
-          <span class="help-text">
-            Biological samples (not including fractions or technical replicates)
-          </span>
+          <span class="help-text">Biological samples (not including fractions or technical replicates)</span>
         </label>
         <div class="sample-count-input">
-          <button
-            class="count-btn"
-            (click)="decrementSamples()"
-            [disabled]="wizardState.sampleCount() <= 1"
-          >
-            -
-          </button>
+          <button type="button" class="count-btn" (click)="decrementSamples()" [disabled]="wizardState.sampleCount() <= 1">-</button>
           <input
             type="number"
             [ngModel]="wizardState.sampleCount()"
@@ -125,17 +203,10 @@ import { TemplateInfo as DynamicTemplateInfo } from '../../../core/models/templa
             max="1000"
             class="count-input"
           />
-          <button
-            class="count-btn"
-            (click)="incrementSamples()"
-            [disabled]="wizardState.sampleCount() >= 1000"
-          >
-            +
-          </button>
+          <button type="button" class="count-btn" (click)="incrementSamples()" [disabled]="wizardState.sampleCount() >= 1000">+</button>
         </div>
       </div>
 
-      <!-- Experiment Description (for AI context) -->
       @if (aiEnabled) {
         <div class="form-section">
           <label class="form-label">
@@ -146,477 +217,241 @@ import { TemplateInfo as DynamicTemplateInfo } from '../../../core/models/templa
             class="form-textarea"
             [ngModel]="state().experimentDescription"
             (ngModelChange)="setDescription($event)"
-            placeholder="E.g., Comparing protein expression between healthy and cancer tissues from 8 patients using TMT labeling..."
+            placeholder="E.g., Comparing protein expression between healthy and cancer tissues..."
             rows="3"
           ></textarea>
         </div>
       }
 
-      <!-- Validation Message -->
+      @if (combination().warnings.length > 0) {
+        <div class="hint-message">
+          @for (w of combination().warnings; track w) {
+            <div>{{ w }}</div>
+          }
+        </div>
+      }
+
       @if (!wizardState.isStep1Valid()) {
         <div class="validation-message">
           <span class="warning-icon">!</span>
-          Please select a template and specify the number of samples to continue.
+          <div>
+            @if (combination().errors.length > 0) {
+              @for (err of combination().errors; track err) {
+                <div>{{ err }}</div>
+              }
+            } @else {
+              Please complete template selection and sample count.
+            }
+          </div>
         </div>
       }
+
+      <wizard-template-columns-preview
+        [templateId]="previewTemplateId()"
+        (close)="closeColumnsPreview()"
+      />
     </div>
   `,
   styles: [`
-    .step-container {
-      max-width: 700px;
-    }
-
-    .step-header {
-      margin-bottom: 24px;
-    }
-
-    .step-header h3 {
-      margin: 0 0 8px 0;
-      font-size: 18px;
-      font-weight: 600;
-      color: #1f2937;
-    }
-
-    .step-description {
-      margin: 0;
-      color: #6b7280;
-      font-size: 14px;
-    }
-
-    .template-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 16px;
-      margin-bottom: 32px;
-    }
-
-    .template-card {
-      position: relative;
-      display: flex;
-      align-items: flex-start;
-      gap: 16px;
-      padding: 20px;
-      border: 2px solid #e5e7eb;
-      border-radius: 12px;
-      background: white;
-      cursor: pointer;
-      text-align: left;
-      transition: all 0.15s;
-    }
-
-    .template-card:hover {
-      border-color: #d1d5db;
-      background: #f9fafb;
-    }
-
-    .template-card.selected {
-      border-color: #3b82f6;
-      background: #eff6ff;
-    }
-
-    .template-icon {
-      width: 48px;
-      height: 48px;
-      border-radius: 10px;
-      background: #f3f4f6;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 24px;
-      flex-shrink: 0;
-    }
-
-    .template-card.selected .template-icon {
-      background: #dbeafe;
-    }
-
-    .template-info {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .template-info p {
-      margin: 0 0 8px 0;
-      font-size: 13px;
-      color: #6b7280;
-      line-height: 1.4;
-    }
-
-    .template-examples {
-      font-size: 12px;
-      color: #9ca3af;
-    }
-
-    .example-label {
-      font-weight: 500;
-    }
-
-    .selected-badge {
-      position: absolute;
-      top: 12px;
-      right: 12px;
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      background: #3b82f6;
-      color: white;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      font-weight: bold;
-    }
-
-    .form-section {
-      margin-bottom: 24px;
-    }
-
-    .form-label {
-      display: block;
-      font-size: 14px;
-      font-weight: 500;
-      color: #374151;
-      margin-bottom: 8px;
-    }
-
-    .help-text {
-      display: block;
-      font-size: 12px;
-      font-weight: normal;
-      color: #6b7280;
-      margin-top: 4px;
-    }
-
-    .optional-badge {
-      display: inline-block;
-      font-size: 11px;
-      font-weight: normal;
-      color: #8b5cf6;
-      background: #f3e8ff;
-      padding: 2px 8px;
-      border-radius: 4px;
-      margin-left: 8px;
-    }
-
-    .sample-count-input {
-      display: flex;
-      align-items: center;
-      gap: 0;
-      width: fit-content;
-    }
-
-    .count-btn {
-      width: 40px;
-      height: 40px;
-      border: 1px solid #d1d5db;
-      background: white;
-      font-size: 20px;
-      font-weight: 500;
-      color: #374151;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-
-    .count-btn:first-child {
-      border-radius: 8px 0 0 8px;
-    }
-
-    .count-btn:last-child {
-      border-radius: 0 8px 8px 0;
-    }
-
-    .count-btn:hover:not(:disabled) {
-      background: #f3f4f6;
-    }
-
-    .count-btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    .count-input {
-      width: 80px;
-      height: 40px;
-      border: 1px solid #d1d5db;
-      border-left: none;
-      border-right: none;
-      text-align: center;
-      font-size: 16px;
-      font-weight: 500;
-    }
-
-    .count-input:focus {
-      outline: none;
-      border-color: #3b82f6;
-    }
-
-    .form-textarea {
-      width: 100%;
-      padding: 12px;
-      border: 1px solid #d1d5db;
-      border-radius: 8px;
-      font-size: 14px;
-      resize: vertical;
-      font-family: inherit;
-    }
-
-    .form-textarea:focus {
-      outline: none;
-      border-color: #3b82f6;
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-    }
-
-    .form-textarea::placeholder {
-      color: #9ca3af;
-    }
-
-    .validation-message {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 12px 16px;
-      background: #fef3c7;
-      border: 1px solid #fcd34d;
-      border-radius: 8px;
-      font-size: 13px;
-      color: #92400e;
-    }
-
-    .warning-icon {
-      width: 20px;
-      height: 20px;
-      border-radius: 50%;
-      background: #f59e0b;
-      color: white;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 12px;
-      font-weight: bold;
-    }
-
-    /* Info Banner */
-    .info-banner {
-      display: flex;
-      gap: 12px;
-      padding: 14px 16px;
-      background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%);
-      border: 1px solid #bfdbfe;
-      border-radius: 10px;
-      margin-bottom: 16px;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-
-    .info-banner:hover {
-      background: linear-gradient(135deg, #dbeafe 0%, #dcfce7 100%);
-    }
-
-    .info-icon {
-      width: 22px;
-      height: 22px;
-      border-radius: 50%;
-      background: #3b82f6;
-      color: white;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 13px;
-      font-weight: 600;
-      flex-shrink: 0;
-    }
-
-    .info-content {
-      flex: 1;
-    }
-
-    .info-content strong {
-      display: block;
-      font-size: 14px;
-      color: #1e40af;
-      margin-bottom: 4px;
-    }
-
-    .info-content p {
-      margin: 0;
-      font-size: 13px;
-      color: #4b5563;
-      line-height: 1.5;
-    }
-
-    .info-link {
-      color: #2563eb;
-      text-decoration: none;
-      margin-left: 8px;
-    }
-
-    .info-link:hover {
-      text-decoration: underline;
-    }
-
-    .expand-icon {
-      font-size: 18px;
-      color: #6b7280;
-      font-weight: bold;
-    }
-
-    /* Template Layers Info */
-    .template-layers-info {
+    .step-container { max-width: 760px; }
+    .step-header { margin-bottom: 20px; }
+    .step-header h3 { margin: 0 0 8px; font-size: 18px; font-weight: 600; color: #1f2937; }
+    .step-description { margin: 0; color: #6b7280; font-size: 14px; }
+    .required { color: #ef4444; }
+    .optional-hint { font-size: 12px; font-weight: 400; color: #9ca3af; margin-left: 6px; }
+    .dev-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #4b5563; margin-bottom: 16px; }
+    .template-section { margin-bottom: 24px; }
+    .section-title { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 14px; font-weight: 600; color: #374151; flex-wrap: wrap; }
+    .template-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .template-card { position: relative; display: flex; align-items: flex-start; gap: 12px; padding: 14px; border: 2px solid #e5e7eb; border-radius: 12px; background: white; cursor: pointer; text-align: left; }
+    .template-card:hover { border-color: #d1d5db; background: #f9fafb; }
+    .template-card.selected { border-color: #3b82f6; background: #eff6ff; }
+    .template-icon { width: 40px; height: 40px; border-radius: 10px; background: #f3f4f6; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+    .template-info { flex: 1; min-width: 0; padding-right: 4px; }
+    .template-header h4 { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: #1f2937; }
+    .template-info p { margin: 0; font-size: 12px; color: #6b7280; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .card-actions {
       display: flex;
       flex-direction: column;
+      align-items: flex-end;
       gap: 8px;
-      padding: 14px 16px;
-      background: #f9fafb;
-      border: 1px solid #e5e7eb;
-      border-radius: 8px;
-      margin-bottom: 20px;
+      flex-shrink: 0;
+      align-self: stretch;
     }
-
-    .layer-info {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .layer-desc {
-      font-size: 13px;
-      color: #6b7280;
-    }
-
-    /* Layer Badges */
-    .layer-badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-size: 10px;
+    .view-cols-btn {
+      margin-top: auto;
+      border: 1px solid #dbeafe;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-size: 11px;
       font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      white-space: nowrap;
     }
-
-    .layer-sample {
-      background: #dbeafe;
-      color: #1e40af;
-    }
-
-    .layer-technology {
-      background: #dcfce7;
-      color: #166534;
-    }
-
-    .layer-experiment {
-      background: #fef3c7;
-      color: #92400e;
-    }
-
-    /* Template Header with Layer */
-    .template-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 4px;
-    }
-
-    .template-header h4 {
-      margin: 0;
-      font-size: 15px;
-      font-weight: 600;
-      color: #1f2937;
-    }
-
-    @media (max-width: 600px) {
-      .template-grid {
-        grid-template-columns: 1fr;
-      }
-    }
+    .view-cols-btn:hover { background: #dbeafe; border-color: #93c5fd; }
+    .selected-badge { width: 22px; height: 22px; border-radius: 50%; background: #3b82f6; color: white; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; }
+    .clear-btn { margin-top: 8px; border: none; background: transparent; color: #2563eb; font-size: 13px; cursor: pointer; padding: 0; }
+    .form-section { margin-bottom: 20px; }
+    .form-label { display: block; font-size: 14px; font-weight: 500; color: #374151; margin-bottom: 8px; }
+    .help-text { display: block; font-size: 12px; font-weight: normal; color: #6b7280; margin-top: 4px; }
+    .optional-badge { display: inline-block; font-size: 11px; font-weight: normal; color: #8b5cf6; background: #f3e8ff; padding: 2px 8px; border-radius: 4px; margin-left: 8px; }
+    .sample-count-input { display: flex; align-items: center; width: fit-content; }
+    .count-btn { width: 40px; height: 40px; border: 1px solid #d1d5db; background: white; font-size: 20px; color: #374151; cursor: pointer; }
+    .count-btn:first-child { border-radius: 8px 0 0 8px; }
+    .count-btn:last-child { border-radius: 0 8px 8px 0; }
+    .count-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .count-input { width: 80px; height: 40px; border: 1px solid #d1d5db; border-left: none; border-right: none; text-align: center; font-size: 16px; font-weight: 500; }
+    .form-textarea { width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; resize: vertical; font-family: inherit; }
+    .validation-message, .hint-message { display: flex; align-items: flex-start; gap: 8px; padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 8px; }
+    .validation-message { background: #fef3c7; border: 1px solid #fcd34d; color: #92400e; }
+    .hint-message { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+    .warning-icon { width: 20px; height: 20px; border-radius: 50%; background: #f59e0b; color: white; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; flex-shrink: 0; }
+    .info-banner { display: flex; gap: 12px; padding: 14px 16px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; margin-bottom: 16px; cursor: pointer; }
+    .info-icon { width: 22px; height: 22px; border-radius: 50%; background: #3b82f6; color: white; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; flex-shrink: 0; }
+    .info-content strong { display: block; font-size: 14px; color: #1e40af; margin-bottom: 4px; }
+    .info-content p { margin: 0; font-size: 13px; color: #4b5563; }
+    .info-link { color: #2563eb; margin-left: 8px; }
+    .expand-icon { font-size: 18px; color: #6b7280; font-weight: bold; }
+    .template-layers-info { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 16px; }
+    .layer-info { display: flex; align-items: center; gap: 10px; }
+    .layer-desc { font-size: 13px; color: #6b7280; }
+    .layer-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .layer-sample { background: #dbeafe; color: #1e40af; }
+    .layer-technology { background: #dcfce7; color: #166534; }
+    .layer-experiment { background: #fef3c7; color: #92400e; }
+    @media (max-width: 600px) { .template-grid { grid-template-columns: 1fr; } }
   `],
 })
 export class ExperimentSetupComponent implements OnInit {
+  /** Optional whitelist; when empty/undefined, show all selectable templates from manifest */
+  @Input() availableTemplates: string[] | null = null;
   @Input() aiEnabled = false;
-  @Input() availableTemplates: string[] = ['human', 'cell-lines', 'vertebrates', 'invertebrates', 'plants', 'ms-proteomics', 'affinity-proteomics'];
 
   readonly wizardState = inject(WizardStateService);
   readonly templateService = inject(TemplateService);
-
-  /** Fallback to static templates if service hasn't loaded yet */
   readonly staticTemplates = WIZARD_TEMPLATES;
-
   readonly state = this.wizardState.state;
-
-  /** Show/hide template system info */
   readonly showTemplateInfo = signal(false);
+  readonly showDevTemplates = signal(false);
+  readonly previewTemplateId = signal<string | null>(null);
+  readonly isLoading = this.templateService.isLoading;
 
-  /** Toggle template info panel */
+  readonly combination = this.wizardState.step1Combination;
+
+  ngOnInit(): void {
+    void this.templateService.fetchTemplates();
+  }
+
   toggleTemplateInfo(): void {
     this.showTemplateInfo.update(v => !v);
   }
 
-  ngOnInit(): void {
-    // Trigger template fetch on component init
-    this.templateService.fetchTemplates();
+  openColumnsPreview(templateId: string, event: Event): void {
+    event.stopPropagation();
+    event.preventDefault();
+    this.previewTemplateId.set(templateId);
   }
 
-  /** Get templates filtered by availableTemplates input */
-  readonly templates = computed(() => {
-    const dynamicTemplates = this.templateService.getTemplateInfoList(this.availableTemplates);
+  closeColumnsPreview(): void {
+    this.previewTemplateId.set(null);
+  }
 
-    // If dynamic templates loaded, use them
-    if (dynamicTemplates.length > 0) {
-      return dynamicTemplates.map(t => ({
-        id: t.id as WizardTemplate,
-        name: t.name,
-        description: t.description,
-        icon: t.icon || 'category',
-        layer: t.layer || 'sample',
+  readonly allSelectable = computed((): Array<TemplateInfo & { examples?: string[] }> => {
+    const filter = this.availableTemplates?.length ? this.availableTemplates : undefined;
+    const dynamic = this.templateService.getTemplateInfoList(filter);
+
+    if (dynamic.length > 0) {
+      return dynamic.map(t => ({
+        ...t,
         examples: this.getTemplateExamples(t.id),
       }));
     }
 
-    // Fall back to static templates filtered by availableTemplates
+    // Fallback static list with correct layers
     return this.staticTemplates
-      .filter(t =>
-        this.availableTemplates.includes(t.id) ||
-        this.availableTemplates.includes(t.id.replace('-', '-'))
-      )
+      .filter(t => !filter || filter.includes(t.id))
       .map(t => ({
-        ...t,
+        id: t.id,
+        name: t.name,
+        description: getTemplateShortDescription(t.id) || t.description,
         layer: this.getStaticTemplateLayer(t.id),
-      }));
+        usableAlone: t.id === 'ms-proteomics' || t.id === 'affinity-proteomics',
+        extends: null,
+        examples: t.examples,
+        version: '1.1.0',
+        status: 'stable' as const,
+        requires: t.id === 'cell-lines'
+          ? [{ layer: 'technology' as const }, { layer: 'sample' as const }]
+          : undefined,
+      }))
+      .sort((a, b) => getTemplateSortOrder(a.id) - getTemplateSortOrder(b.id));
   });
 
-  /** Get layer for static templates */
-  private getStaticTemplateLayer(templateId: string): string {
-    const layerMap: Record<string, string> = {
-      'human': 'sample',
-      'cell-lines': 'experiment',
-      'vertebrates': 'sample',
-      'invertebrates': 'sample',
-      'plants': 'sample',
+  private filterVisible(layer: 'sample' | 'technology' | 'experiment') {
+    return computed(() => {
+      const showDev = this.showDevTemplates();
+      return this.allSelectable()
+        .filter(t => t.layer === layer)
+        .filter(t => showDev || !isDevelopmentTemplate(t));
+    });
+  }
+
+  readonly visibleTechnologyTemplates = this.filterVisible('technology');
+  readonly visibleSampleTemplates = this.filterVisible('sample');
+  readonly visibleExperimentTemplates = this.filterVisible('experiment');
+
+  private getStaticTemplateLayer(templateId: string): 'sample' | 'technology' | 'experiment' {
+    const layerMap: Record<string, 'sample' | 'technology' | 'experiment'> = {
+      human: 'sample',
+      vertebrates: 'sample',
+      invertebrates: 'sample',
+      plants: 'sample',
       'ms-proteomics': 'technology',
       'affinity-proteomics': 'technology',
+      'cell-lines': 'experiment',
+      'dia-acquisition': 'experiment',
+      'single-cell': 'experiment',
+      immunopeptidomics: 'experiment',
+      crosslinking: 'experiment',
     };
     return layerMap[templateId] || 'sample';
   }
 
-  /** Get example use cases for templates */
   private getTemplateExamples(templateId: string): string[] {
     const exampleMap: Record<string, string[]> = {
-      'human': ['Patient biopsies', 'Blood samples', 'Tumor tissues'],
-      'cell-lines': ['HeLa cells', 'HEK293', 'MCF-7'],
-      'vertebrates': ['Mouse liver', 'Rat brain', 'Zebrafish'],
-      'invertebrates': ['Drosophila', 'C. elegans', 'Insects'],
-      'plants': ['Arabidopsis', 'Rice', 'Wheat'],
-      'ms-proteomics': ['DDA', 'DIA', 'PRM', 'SRM'],
-      'affinity-proteomics': ['Olink', 'SomaScan', 'Protein arrays'],
+      human: ['Patient biopsies', 'Blood samples'],
+      'cell-lines': ['HeLa', 'HEK293'],
+      vertebrates: ['Mouse liver', 'Rat brain'],
+      invertebrates: ['Drosophila', 'C. elegans'],
+      plants: ['Arabidopsis', 'Rice'],
+      'ms-proteomics': ['DDA', 'DIA'],
+      'affinity-proteomics': ['Olink', 'SomaScan'],
+      'dia-acquisition': ['DIA scan windows'],
+      'single-cell': ['SCP'],
     };
     return exampleMap[templateId] || [];
   }
 
-  /** Check if templates are still loading */
-  readonly isLoading = this.templateService.isLoading;
+  selectSampleTemplate(template: WizardTemplate): void {
+    this.wizardState.setSampleTemplate(template);
+  }
 
-  selectTemplate(template: WizardTemplate): void {
-    this.wizardState.setTemplate(template);
+  clearSampleTemplate(): void {
+    this.wizardState.setSampleTemplate(null);
+  }
+
+  selectTechnologyTemplate(template: WizardTemplate): void {
+    this.wizardState.setTechnologyTemplate(template);
+  }
+
+  toggleExperiment(templateId: string): void {
+    this.wizardState.toggleExperimentTemplate(templateId);
+  }
+
+  isExperimentSelected(templateId: string): boolean {
+    return (this.wizardState.experimentTemplates() || []).includes(templateId);
   }
 
   setSampleCount(count: number): void {
@@ -636,48 +471,6 @@ export class ExperimentSetupComponent implements OnInit {
   }
 
   getIcon(templateId: WizardTemplate): string {
-    // First check dynamic templates
-    const dynamicTemplate = this.templateService.getTemplateInfo(templateId);
-    if (dynamicTemplate?.icon) {
-      return this.iconToEmoji(dynamicTemplate.icon);
-    }
-
-    // Fall back to static icons
-    switch (templateId) {
-      case 'human': return '\ud83e\uddd1';
-      case 'cell-line':
-      case 'cell-lines': return '\ud83e\uddeb';
-      case 'vertebrate':
-      case 'vertebrates': return '\ud83d\udc2d';
-      case 'invertebrates': return '\ud83e\udeb2';
-      case 'plants': return '\ud83c\udf31';
-      case 'ms-proteomics': return '\ud83d\udcca';
-      case 'affinity-proteomics': return '\ud83e\uddea';
-      case 'other': return '\ud83e\uddec';
-      default: return '\u2753';
-    }
-  }
-
-  /** Convert Material icon name to emoji */
-  private iconToEmoji(icon: string): string {
-    const iconMap: Record<string, string> = {
-      'person': '\ud83e\uddd1',
-      'science': '\ud83e\uddeb',
-      'pets': '\ud83d\udc2d',
-      'category': '\ud83e\uddec',
-      'analytics': '\ud83d\udcca',
-      'biotech': '\ud83e\uddea',
-      'eco': '\ud83c\udf31',
-      'bug_report': '\ud83e\udeb2',
-      'scatter_plot': '\ud83d\udcc8',
-      'assessment': '\ud83d\udcca',
-      'grain': '\ud83c\udf3e',
-      'link': '\ud83d\udd17',
-      'vaccines': '\ud83d\udc89',
-      'diversity_3': '\ud83e\udda0',
-      'hub': '\ud83d\udd17',
-      'developer_board': '\ud83d\udcdf',
-    };
-    return iconMap[icon] || '\u2753';
+    return getTemplateEmoji(templateId);
   }
 }

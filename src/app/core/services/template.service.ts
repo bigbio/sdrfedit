@@ -6,6 +6,7 @@
  */
 
 import { Injectable, signal, computed } from '@angular/core';
+import { load as loadYaml } from 'js-yaml';
 import {
   TemplateDefinition,
   TemplateColumn,
@@ -13,170 +14,29 @@ import {
   ResolvedTemplate,
   TemplateInfo,
   TemplateManifest,
+  TemplateSelection,
+  TemplateCombinationResult,
+  TemplateLayer,
   RequirementLevel,
   convertYamlToTemplateDefinition,
+  parseTemplateRequires,
+  parseTemplateExcludes,
+  parseExtendsTemplateName,
   getTemplateIcon,
   getTemplateDisplayName,
+  getTemplateShortDescription,
+  getTemplateSortOrder,
+  isDevelopmentTemplate,
 } from '../models/template';
+import { isWizardSkippedCharacteristic } from '../models/wizard';
 
-// Simple YAML parser for template files (handles basic YAML structure)
-function parseSimpleYaml(yamlText: string): any {
-  // This is a minimal YAML parser for the specific template format
-  // For production, consider using js-yaml library
-  const lines = yamlText.split('\n');
-  const result: any = {};
-  const stack: { obj: any; indent: number; key?: string }[] = [{ obj: result, indent: -1 }];
-  let currentArray: any[] | null = null;
-  let currentArrayKey: string | null = null;
-  let currentArrayIndent = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    // Skip comments and empty lines
-    if (trimmed.startsWith('#') || trimmed === '') continue;
-
-    // Calculate indentation
-    const indent = line.search(/\S/);
-
-    // Handle array items
-    if (trimmed.startsWith('- ')) {
-      const content = trimmed.substring(2).trim();
-
-      // Find the current array
-      if (currentArray === null || indent <= currentArrayIndent) {
-        // New array or different array
-        const parent = stack[stack.length - 1].obj;
-        if (currentArrayKey) {
-          currentArray = parent[currentArrayKey] || [];
-          parent[currentArrayKey] = currentArray;
-        }
-        currentArrayIndent = indent;
-      }
-
-      if (content.includes(':')) {
-        // Array of objects
-        const obj: any = {};
-        const [key, ...valueParts] = content.split(':');
-        const value = valueParts.join(':').trim();
-        if (value) {
-          obj[key.trim()] = parseValue(value);
-        }
-        // Look ahead for nested properties
-        let j = i + 1;
-        const itemIndent = indent + 2;
-        while (j < lines.length) {
-          const nextLine = lines[j];
-          const nextTrimmed = nextLine.trim();
-          if (nextTrimmed === '' || nextTrimmed.startsWith('#')) {
-            j++;
-            continue;
-          }
-          const nextIndent = nextLine.search(/\S/);
-          if (nextIndent <= indent) break;
-          if (nextTrimmed.startsWith('- ')) break;
-
-          if (nextTrimmed.includes(':')) {
-            const [nKey, ...nValueParts] = nextTrimmed.split(':');
-            const nValue = nValueParts.join(':').trim();
-            const keyName = nKey.trim();
-            if (nValue === '' || nValue === '|' || nValue === '>') {
-              // Nested object or multiline
-              obj[keyName] = parseNestedObject(lines, j + 1, nextIndent + 2);
-            } else if (nValue.startsWith('[') && nValue.endsWith(']')) {
-              // Inline array
-              obj[keyName] = nValue.slice(1, -1).split(',').map(s => parseValue(s.trim()));
-            } else {
-              obj[keyName] = parseValue(nValue);
-            }
-          }
-          j++;
-        }
-        i = j - 1;
-        if (currentArray) currentArray.push(obj);
-      } else {
-        // Simple array item
-        if (currentArray) currentArray.push(parseValue(content));
-      }
-      continue;
-    }
-
-    // Handle key: value pairs
-    if (trimmed.includes(':')) {
-      const colonIndex = trimmed.indexOf(':');
-      const key = trimmed.substring(0, colonIndex).trim();
-      const value = trimmed.substring(colonIndex + 1).trim();
-
-      // Pop stack to correct level
-      while (stack.length > 1 && indent <= stack[stack.length - 1].indent) {
-        stack.pop();
-      }
-
-      const current = stack[stack.length - 1].obj;
-
-      if (value === '' || value === '|' || value === '>') {
-        // Start of nested object or array
-        const newObj = value === '' ? {} : '';
-        current[key] = newObj;
-        if (typeof newObj === 'object') {
-          stack.push({ obj: newObj, indent, key });
-          currentArrayKey = key;
-          currentArray = null;
-        }
-      } else if (value.startsWith('[') && value.endsWith(']')) {
-        // Inline array
-        current[key] = value.slice(1, -1).split(',').map(s => parseValue(s.trim()));
-        currentArray = null;
-        currentArrayKey = null;
-      } else {
-        // Simple value
-        current[key] = parseValue(value);
-        currentArray = null;
-        currentArrayKey = null;
-      }
-    }
-  }
-
-  return result;
-}
-
-function parseNestedObject(lines: string[], startIndex: number, minIndent: number): any {
-  const result: any = {};
-  for (let i = startIndex; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-    if (trimmed === '' || trimmed.startsWith('#')) continue;
-    const indent = line.search(/\S/);
-    if (indent < minIndent) break;
-    if (trimmed.includes(':')) {
-      const [key, ...valueParts] = trimmed.split(':');
-      const value = valueParts.join(':').trim();
-      result[key.trim()] = parseValue(value);
-    }
-  }
-  return result;
-}
-
-function parseValue(value: string): any {
-  if (value === '' || value === 'null') return null;
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  if (/^-?\d+$/.test(value)) return parseInt(value, 10);
-  if (/^-?\d+\.\d+$/.test(value)) return parseFloat(value);
-  // Remove quotes
-  if ((value.startsWith("'") && value.endsWith("'")) ||
-      (value.startsWith('"') && value.endsWith('"'))) {
-    return value.slice(1, -1);
-  }
-  return value;
+/** Parse official SDRF template YAML (js-yaml — custom parser dropped columns). */
+function parseYaml(yamlText: string): any {
+  return loadYaml(yamlText) ?? {};
 }
 
 const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/bigbio/sdrf-templates/main';
 const API_BASE_URL = 'https://www.ebi.ac.uk/pride/services/sdrf-validator';
-
-// Default templates to show in wizard
-const DEFAULT_WIZARD_TEMPLATES = ['human', 'cell-lines', 'vertebrates', 'invertebrates', 'plants', 'ms-proteomics', 'affinity-proteomics'];
 
 // Cache TTL in milliseconds (5 minutes)
 const CACHE_TTL = 5 * 60 * 1000;
@@ -261,15 +121,22 @@ export class TemplateService {
 
         for (let j = 0; j < results.length; j++) {
           const result = results[j];
+          const name = batch[j];
           if (result.status === 'fulfilled' && result.value) {
-            templates.set(batch[j], result.value);
+            // Individual YAML files often omit layer/requires; merge from manifest
+            templates.set(name, this.mergeManifestMetadata(result.value, manifest.templates[name]));
           } else if (result.status === 'rejected') {
-            console.warn(`Failed to fetch template ${batch[j]}:`, result.reason);
+            console.warn(`Failed to fetch template ${name}:`, result.reason);
           }
         }
       }
 
-      this._templates.set(templates);
+      if (templates.size === 0) {
+        // Manifest ok but definitions failed (network/CORS) — use fallbacks
+        await this.loadFallbackTemplates();
+      } else {
+        this._templates.set(templates);
+      }
       this._lastFetchTime.set(now);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -286,6 +153,27 @@ export class TemplateService {
   }
 
   /**
+   * Enrich a fetched template definition with layer/requires from the manifest.
+   * Per-template YAML often omits these fields (they live in templates.yaml).
+   */
+  private mergeManifestMetadata(
+    definition: TemplateDefinition,
+    entry?: TemplateManifest['templates'][string]
+  ): TemplateDefinition {
+    if (!entry) return definition;
+    return {
+      ...definition,
+      layer: definition.layer ?? entry.layer ?? null,
+      usableAlone: definition.usableAlone || entry.usableAlone,
+      requires: definition.requires ?? entry.requires,
+      excludes: definition.excludes ?? entry.excludes,
+      status: definition.status ?? entry.status,
+      version: definition.version || entry.latest,
+      description: definition.description || entry.description || '',
+    };
+  }
+
+  /**
    * Fetch the templates manifest.
    */
   private async fetchManifest(): Promise<TemplateManifest> {
@@ -295,7 +183,7 @@ export class TemplateService {
     }
 
     const yamlText = await response.text();
-    const parsed = parseSimpleYaml(yamlText);
+    const parsed = parseYaml(yamlText);
 
     return {
       schemaVersion: parsed.schema_version || '1.0',
@@ -310,13 +198,16 @@ export class TemplateService {
   private convertManifestTemplates(templates: any): TemplateManifest['templates'] {
     const result: TemplateManifest['templates'] = {};
     for (const [name, data] of Object.entries(templates as Record<string, any>)) {
+      const latest = data.latest || '1.0.0';
       result[name] = {
-        latest: data.latest || '1.0.0',
-        versions: data.versions || [data.latest || '1.0.0'],
+        latest,
+        versions: data.versions || [latest],
         extends: data.extends || null,
         usableAlone: data.usable_alone ?? false,
         layer: data.layer || null,
-        status: data.status || 'stable',
+        requires: parseTemplateRequires(data.requires),
+        excludes: parseTemplateExcludes(data.excludes),
+        status: data.status || (String(latest).includes('dev') ? 'development' : 'stable'),
         description: data.description || '',
       };
     }
@@ -335,7 +226,7 @@ export class TemplateService {
       }
 
       const yamlText = await response.text();
-      const parsed = parseSimpleYaml(yamlText);
+      const parsed = parseYaml(yamlText);
       return convertYamlToTemplateDefinition(parsed);
     } catch (error) {
       console.warn(`Failed to fetch template ${name}@${version}:`, error);
@@ -347,24 +238,14 @@ export class TemplateService {
    * Load fallback templates when fetch fails.
    */
   private async loadFallbackTemplates(): Promise<void> {
-    // Create minimal fallback templates based on the template hierarchy
     const fallbackTemplates: TemplateDefinition[] = [
       {
         name: 'human',
         description: 'Human Samples',
         version: '1.1.0',
         extends: null,
-        usableAlone: true,
+        usableAlone: false,
         layer: 'sample',
-        columns: this.getBaseColumns(),
-      },
-      {
-        name: 'cell-lines',
-        description: 'Cell Lines',
-        version: '1.1.0',
-        extends: null,
-        usableAlone: true,
-        layer: 'experiment',
         columns: this.getBaseColumns(),
       },
       {
@@ -372,7 +253,7 @@ export class TemplateService {
         description: 'Vertebrates (Non-Human)',
         version: '1.1.0',
         extends: null,
-        usableAlone: true,
+        usableAlone: false,
         layer: 'sample',
         columns: this.getBaseColumns(),
       },
@@ -381,7 +262,7 @@ export class TemplateService {
         description: 'Invertebrates',
         version: '1.1.0',
         extends: null,
-        usableAlone: true,
+        usableAlone: false,
         layer: 'sample',
         columns: this.getBaseColumns(),
       },
@@ -390,7 +271,7 @@ export class TemplateService {
         description: 'Plants',
         version: '1.1.0',
         extends: null,
-        usableAlone: true,
+        usableAlone: false,
         layer: 'sample',
         columns: this.getBaseColumns(),
       },
@@ -411,6 +292,52 @@ export class TemplateService {
         usableAlone: true,
         layer: 'technology',
         columns: this.getBaseColumns(),
+      },
+      {
+        name: 'cell-lines',
+        description: 'Cell Lines',
+        version: '1.1.0',
+        extends: null,
+        usableAlone: false,
+        layer: 'experiment',
+        requires: [{ layer: 'technology' }, { layer: 'sample' }],
+        columns: this.getBaseColumns(),
+      },
+      {
+        name: 'dia-acquisition',
+        description: 'DIA Acquisition',
+        version: '1.1.0',
+        extends: 'ms-proteomics',
+        usableAlone: false,
+        layer: 'experiment',
+        columns: [],
+      },
+      {
+        name: 'single-cell',
+        description: 'Single Cell',
+        version: '1.0.0',
+        extends: 'ms-proteomics',
+        usableAlone: false,
+        layer: 'experiment',
+        columns: [],
+      },
+      {
+        name: 'immunopeptidomics',
+        description: 'Immunopeptidomics',
+        version: '1.0.0',
+        extends: 'ms-proteomics',
+        usableAlone: false,
+        layer: 'experiment',
+        columns: [],
+      },
+      {
+        name: 'crosslinking',
+        description: 'Crosslinking (XL-MS)',
+        version: '1.0.0',
+        extends: 'ms-proteomics',
+        usableAlone: false,
+        layer: 'experiment',
+        columns: [],
       },
     ];
 
@@ -493,7 +420,8 @@ export class TemplateService {
     // Walk up the inheritance chain
     let currentTemplate = template;
     while (currentTemplate.extends) {
-      const parentName = currentTemplate.extends;
+      const parentName = parseExtendsTemplateName(currentTemplate.extends);
+      if (!parentName) break;
       parentChain.unshift(parentName);
 
       const parent = this._templates().get(parentName);
@@ -517,6 +445,78 @@ export class TemplateService {
       parentChain,
       resolvedValidators,
     };
+  }
+
+  /**
+   * Characteristics columns for wizard Step2 from sample + experiment templates.
+   * Technology templates are intentionally excluded.
+   */
+  async getWizardCharacteristicColumns(selection: {
+    sampleTemplate: string | null;
+    experimentTemplates: string[];
+  }): Promise<{
+    required: TemplateColumn[];
+    recommended: TemplateColumn[];
+    all: TemplateColumn[];
+  }> {
+    if (this._templates().size === 0) {
+      await this.fetchTemplates();
+    }
+
+    const ids = [
+      selection.sampleTemplate,
+      ...(selection.experimentTemplates || []),
+    ].filter((id): id is string => !!id);
+
+    let merged: TemplateColumn[] = [];
+    for (const id of ids) {
+      try {
+        const resolved = await this.getResolvedTemplate(id);
+        merged = this.mergeColumns(merged, resolved.resolvedColumns || []);
+      } catch (e) {
+        console.warn(`Could not resolve template columns for ${id}:`, e);
+      }
+    }
+
+    const characteristics = merged.filter(
+      c =>
+        typeof c.name === 'string' &&
+        c.name.toLowerCase().startsWith('characteristics[') &&
+        !isWizardSkippedCharacteristic(c.name)
+    );
+
+    // Minimal fallback when resolve yields nothing (offline / no sample)
+    if (characteristics.length === 0) {
+      const fallback: TemplateColumn[] = [
+        {
+          name: 'characteristics[organism]',
+          description: 'Species',
+          requirement: 'required',
+          validators: [{ validatorName: 'ontology', params: { ontologies: ['ncbitaxon'] } }],
+        },
+        {
+          name: 'characteristics[disease]',
+          description: 'Disease state',
+          requirement: 'required',
+          validators: [{ validatorName: 'ontology', params: { ontologies: ['mondo', 'efo', 'doid'] } }],
+        },
+        {
+          name: 'characteristics[organism part]',
+          description: 'Anatomical part',
+          requirement: 'required',
+          validators: [{ validatorName: 'ontology', params: { ontologies: ['uberon', 'bto'] } }],
+        },
+      ];
+      return {
+        required: fallback,
+        recommended: [],
+        all: fallback,
+      };
+    }
+
+    const required = characteristics.filter(c => (c.requirement || 'optional') === 'required');
+    const recommended = characteristics.filter(c => c.requirement === 'recommended');
+    return { required, recommended, all: [...required, ...recommended] };
   }
 
   /**
@@ -576,43 +576,231 @@ export class TemplateService {
   }
 
   /**
-   * Get template info list for UI display.
+   * Resolve effective layer from definition, manifest, or known wizard defaults.
    */
-  getTemplateInfoList(filterIds?: string[]): TemplateInfo[] {
-    const templates = this.allTemplates();
-    const filtered = filterIds
-      ? templates.filter(t => filterIds.includes(t.name))
-      : templates;
+  private resolveLayer(
+    name: string,
+    definitionLayer?: TemplateLayer | null,
+    entryLayer?: TemplateLayer | null
+  ): TemplateLayer | null {
+    return definitionLayer ?? entryLayer ?? this.getKnownTemplateLayer(name);
+  }
 
-    return filtered.map(t => ({
-      id: t.name,
-      name: getTemplateDisplayName(t.name),
-      description: t.description,
-      layer: t.layer,
-      usableAlone: t.usableAlone,
-      extends: t.extends,
-      icon: getTemplateIcon(t.name),
-      status: t.status,
-    }));
+  /**
+   * Hardcoded layers for common wizard templates when remote data is unavailable.
+   */
+  private getKnownTemplateLayer(name: string): TemplateLayer | null {
+    const known: Record<string, TemplateLayer> = {
+      human: 'sample',
+      vertebrates: 'sample',
+      invertebrates: 'sample',
+      plants: 'sample',
+      'clinical-metadata': 'sample',
+      'oncology-metadata': 'sample',
+      metaproteomics: 'sample',
+      'human-gut': 'sample',
+      soil: 'sample',
+      water: 'sample',
+      'ms-proteomics': 'technology',
+      'affinity-proteomics': 'technology',
+      'ms-metabolomics': 'technology',
+      'cell-lines': 'experiment',
+      'dia-acquisition': 'experiment',
+      'single-cell': 'experiment',
+      immunopeptidomics: 'experiment',
+      crosslinking: 'experiment',
+      'lc-ms-metabolomics': 'experiment',
+      'gc-ms-metabolomics': 'experiment',
+    };
+    return known[name] ?? null;
+  }
+
+  /**
+   * Get template info list for UI display.
+   * By default excludes internal templates (layer null).
+   */
+  getTemplateInfoList(filterIds?: string[], options?: { includeInternal?: boolean }): TemplateInfo[] {
+    const manifest = this._manifest();
+    const templates = this.allTemplates();
+    const filtered = templates.filter(t => {
+      const entry = manifest?.templates[t.name];
+      const layer = this.resolveLayer(t.name, t.layer, entry?.layer);
+      if (!options?.includeInternal && layer == null) return false;
+      if (filterIds && !filterIds.includes(t.name)) return false;
+      return true;
+    });
+
+    return filtered
+      .map(t => {
+        const entry = manifest?.templates[t.name];
+        return {
+          id: t.name,
+          name: getTemplateDisplayName(t.name),
+          description:
+            getTemplateShortDescription(t.name) ||
+            t.description ||
+            entry?.description ||
+            '',
+          layer: this.resolveLayer(t.name, t.layer, entry?.layer),
+          usableAlone: t.usableAlone || entry?.usableAlone || false,
+          extends: t.extends,
+          requires: t.requires ?? entry?.requires,
+          excludes: t.excludes ?? entry?.excludes,
+          icon: getTemplateIcon(t.name),
+          status: t.status ?? entry?.status,
+          version: t.version || entry?.latest,
+        };
+      })
+      .sort((a, b) => getTemplateSortOrder(a.id) - getTemplateSortOrder(b.id));
   }
 
   /**
    * Get template info for a specific template.
+   * Falls back to manifest entry or known layer map when the YAML definition
+   * is missing (UI may still show static cards in that case).
    */
   getTemplateInfo(name: string): TemplateInfo | null {
     const template = this._templates().get(name);
-    if (!template) return null;
+    const entry = this._manifest()?.templates[name];
+    const layer = this.resolveLayer(name, template?.layer, entry?.layer);
+
+    if (!template && !entry && !layer) return null;
 
     return {
-      id: template.name,
-      name: getTemplateDisplayName(template.name),
-      description: template.description,
-      layer: template.layer,
-      usableAlone: template.usableAlone,
-      extends: template.extends,
-      icon: getTemplateIcon(template.name),
-      status: template.status,
+      id: name,
+      name: getTemplateDisplayName(name),
+      description:
+        getTemplateShortDescription(name) ||
+        template?.description ||
+        entry?.description ||
+        '',
+      layer,
+      usableAlone: template?.usableAlone || entry?.usableAlone || false,
+      extends: template?.extends ?? entry?.extends ?? null,
+      requires: template?.requires ?? entry?.requires,
+      excludes: template?.excludes ?? entry?.excludes,
+      icon: getTemplateIcon(name),
+      status: template?.status ?? entry?.status,
+      version: template?.version || entry?.latest,
     };
+  }
+
+  /**
+   * Get latest version string for a template from manifest/definition.
+   */
+  getTemplateVersion(name: string): string {
+    const entry = this._manifest()?.templates[name];
+    if (entry?.latest) return entry.latest;
+    return this._templates().get(name)?.version || '1.0.0';
+  }
+
+  /**
+   * Validate a layered template selection against manifest rules.
+   */
+  validateTemplateCombination(selection: TemplateSelection): TemplateCombinationResult {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const { technologyTemplate, sampleTemplate, experimentTemplates } = selection;
+
+    if (!technologyTemplate) {
+      errors.push('Select a technology template (e.g. ms-proteomics).');
+    } else {
+      const tech = this.getTemplateInfo(technologyTemplate);
+      if (!tech || tech.layer !== 'technology') {
+        errors.push(`"${technologyTemplate}" is not a technology template.`);
+      }
+    }
+
+    if (sampleTemplate) {
+      const sample = this.getTemplateInfo(sampleTemplate);
+      if (!sample || sample.layer !== 'sample') {
+        errors.push(`"${sampleTemplate}" is not a sample template.`);
+      }
+    }
+
+    const selectedIds = [
+      technologyTemplate,
+      sampleTemplate,
+      ...experimentTemplates,
+    ].filter((id): id is string => !!id);
+
+    for (const expId of experimentTemplates) {
+      const exp = this.getTemplateInfo(expId);
+      if (!exp) {
+        errors.push(`Unknown experiment template: ${expId}`);
+        continue;
+      }
+      if (exp.layer !== 'experiment') {
+        errors.push(`"${expId}" is not an experiment template.`);
+        continue;
+      }
+
+      for (const req of exp.requires || []) {
+        if (req.layer === 'technology' && !technologyTemplate) {
+          errors.push(`${expId} requires a technology template.`);
+        }
+        if (req.layer === 'sample' && !sampleTemplate) {
+          errors.push(`${expId} requires a sample template.`);
+        }
+        if (req.template && !selectedIds.includes(req.template)) {
+          errors.push(`${expId} requires template "${req.template}".`);
+        }
+      }
+
+      for (const excluded of exp.excludes?.templates || []) {
+        if (selectedIds.includes(excluded)) {
+          errors.push(`${expId} cannot be combined with "${excluded}".`);
+        }
+      }
+    }
+
+    // Check excludes on sample/technology against selected experiments
+    for (const id of [technologyTemplate, sampleTemplate]) {
+      if (!id) continue;
+      const info = this.getTemplateInfo(id);
+      for (const excluded of info?.excludes?.templates || []) {
+        if (selectedIds.includes(excluded)) {
+          errors.push(`${id} cannot be combined with "${excluded}".`);
+        }
+      }
+    }
+
+    if (technologyTemplate && !sampleTemplate && experimentTemplates.length === 0) {
+      const tech = this.getTemplateInfo(technologyTemplate);
+      if (tech && !tech.usableAlone) {
+        errors.push(`"${technologyTemplate}" cannot be used alone; select a sample template.`);
+      } else {
+        warnings.push('No sample template selected. Organism-specific columns may be incomplete.');
+      }
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors: [...new Set(errors)],
+      warnings: [...new Set(warnings)],
+    };
+  }
+
+  /**
+   * Leaf template ids to write into comment[sdrf template] columns.
+   */
+  getLeafTemplateIds(selection: TemplateSelection): string[] {
+    const leaves: string[] = [];
+    if (selection.sampleTemplate) leaves.push(selection.sampleTemplate);
+    if (selection.technologyTemplate) leaves.push(selection.technologyTemplate);
+    for (const exp of selection.experimentTemplates) {
+      if (exp && !leaves.includes(exp)) leaves.push(exp);
+    }
+    return leaves;
+  }
+
+  /**
+   * Whether a template should be hidden behind the development toggle.
+   */
+  isDevTemplate(id: string): boolean {
+    const info = this.getTemplateInfo(id);
+    if (!info) return false;
+    return isDevelopmentTemplate(info);
   }
 
   /**
@@ -624,19 +812,14 @@ export class TemplateService {
     if (!template) return [];
 
     const allInfo = this.getTemplateInfoList();
-
-    // Filter out mutually exclusive templates
     const mutuallyExclusive = template.mutuallyExclusiveWith || [];
 
     return allInfo.filter(t => {
       if (t.id === selectedTemplate) return false;
       if (mutuallyExclusive.includes(t.id)) return false;
 
-      // Sample + technology can combine
       if (template.layer === 'sample' && t.layer === 'technology') return true;
       if (template.layer === 'technology' && t.layer === 'sample') return true;
-
-      // Experiment can combine with sample or technology
       if (template.layer === 'experiment' && (t.layer === 'sample' || t.layer === 'technology')) return true;
       if ((template.layer === 'sample' || template.layer === 'technology') && t.layer === 'experiment') return true;
 

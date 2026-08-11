@@ -4,104 +4,174 @@
  * Converts WizardState into an SdrfTable structure.
  */
 
-import { Injectable } from '@angular/core';
+import { Injectable, inject } from '@angular/core';
 import {
   WizardState,
-  OntologyTerm,
+  WizardModification,
+  WizardFactor,
   DynamicColumnDefault,
-  LABEL_CONFIGS,
+  WizardExpansionRow,
+  WizardSampleEntry,
+  SDRF_SPEC_VERSION,
+  formatSdrfSemver,
+  getSampleTemplateId,
+  getDefaultMaterialType,
   isHumanTemplate,
   isCellLineTemplate,
-  isVertebrateTemplate,
-  isInvertebrateTemplate,
-  isPlantTemplate,
+  hasCellLinesExperiment,
+  getSpecialtyCharacteristicKey,
+  isWizardSkippedCharacteristic,
+  materializeSampleFieldsFromChoices,
+  buildWizardExpansionRows,
+  buildModifiersFromExpansion,
 } from '../models/wizard';
 import { SdrfTable, createEmptyTable } from '../models/sdrf-table';
 import { SdrfColumn, ColumnType, Modifier } from '../models/sdrf-column';
+import { TemplateService } from './template.service';
 
 @Injectable({ providedIn: 'root' })
 export class WizardGeneratorService {
+  private readonly templateService = inject(TemplateService);
+  private expansionRows: WizardExpansionRow[] = [];
+
   /**
    * Generate an SdrfTable from wizard state.
    */
   generate(state: WizardState): SdrfTable {
-    const table = createEmptyTable(this.calculateRowCount(state));
+    state = materializeSampleFieldsFromChoices(state);
+    this.expansionRows = buildWizardExpansionRows(state);
+    const table = createEmptyTable(Math.max(1, this.expansionRows.length));
     let columnPosition = 0;
+    const sampleTemplate = getSampleTemplateId(state);
+    const experiments = state.experimentTemplates || [];
 
-    // Required columns in order
     table.columns.push(this.createSourceNameColumn(state, columnPosition++));
-    table.columns.push(this.createOrganismColumn(state, columnPosition++));
-    table.columns.push(this.createDiseaseColumn(state, columnPosition++));
-    table.columns.push(this.createOrganismPartColumn(state, columnPosition++));
 
-    // Template-specific columns (using helper functions for both legacy and new template IDs)
-    if (isHumanTemplate(state.template)) {
-      if (state.defaultSex || state.samples.some(s => s.sex)) {
-        table.columns.push(this.createSexColumn(state, columnPosition++));
+    const charCols = (state.characteristicColumns || []).filter(
+      c => !isWizardSkippedCharacteristic(c.name)
+    );
+
+    const emitted = new Set<string>();
+
+    const emitSpecialty = (name: string, col: SdrfColumn) => {
+      if (emitted.has(name.toLowerCase())) return;
+      table.columns.push(col);
+      emitted.add(name.toLowerCase());
+    };
+
+    // Always emit core organism/disease/part when present in meta or as legacy fallback
+    const hasMeta = charCols.length > 0;
+    const shouldEmit = (columnName: string, requirement: string): boolean => {
+      if (!hasMeta) {
+        return ['characteristics[organism]', 'characteristics[disease]', 'characteristics[organism part]', 'characteristics[material type]'].includes(columnName);
       }
-      if (state.defaultAge || state.samples.some(s => s.age)) {
-        table.columns.push(this.createAgeColumn(state, columnPosition++));
-      }
+      const meta = charCols.find(c => c.name.toLowerCase() === columnName.toLowerCase());
+      if (!meta) return false;
+      if (meta.requirement === 'required') return true;
+      // recommended: only if has default or sample override
+      return this.hasCharacteristicOutputValue(state, columnName);
+    };
+
+    if (shouldEmit('characteristics[organism]', 'required') || !hasMeta) {
+      emitSpecialty('characteristics[organism]', this.createOrganismColumn(state, columnPosition++));
+    }
+    if (shouldEmit('characteristics[disease]', 'required') || !hasMeta) {
+      emitSpecialty('characteristics[disease]', this.createDiseaseColumn(state, columnPosition++));
+    }
+    if (shouldEmit('characteristics[organism part]', 'required') || !hasMeta) {
+      emitSpecialty('characteristics[organism part]', this.createOrganismPartColumn(state, columnPosition++));
     }
 
-    if (isCellLineTemplate(state.template)) {
-      if (state.defaultCellLine || state.samples.some(s => s.cellLine)) {
-        table.columns.push(this.createCellLineColumn(state, columnPosition++));
-      }
+    // material type: always for generated tables (structural)
+    emitSpecialty(
+      'characteristics[material type]',
+      this.createMaterialTypeColumn(sampleTemplate, experiments, columnPosition++)
+    );
+
+    if (
+      charCols.some(c => c.name.toLowerCase() === 'characteristics[sex]') &&
+      (shouldEmit('characteristics[sex]', 'required') ||
+        this.hasCharacteristicOutputValue(state, 'characteristics[sex]'))
+    ) {
+      emitSpecialty('characteristics[sex]', this.createSexColumn(state, columnPosition++));
+    } else if (!hasMeta && isHumanTemplate(sampleTemplate)) {
+      emitSpecialty('characteristics[sex]', this.createSexColumn(state, columnPosition++));
     }
 
-    if (isVertebrateTemplate(state.template)) {
-      if (state.strainBreed) {
-        table.columns.push(this.createStrainBreedColumn(state, columnPosition++));
-      }
-      if (state.developmentalStage) {
-        table.columns.push(this.createDevelopmentalStageColumn(state, columnPosition++));
-      }
+    if (
+      charCols.some(c => c.name.toLowerCase() === 'characteristics[age]') &&
+      (shouldEmit('characteristics[age]', 'required') ||
+        this.hasCharacteristicOutputValue(state, 'characteristics[age]'))
+    ) {
+      emitSpecialty('characteristics[age]', this.createAgeColumn(state, columnPosition++));
+    } else if (!hasMeta && isHumanTemplate(sampleTemplate)) {
+      emitSpecialty('characteristics[age]', this.createAgeColumn(state, columnPosition++));
     }
 
-    if (isInvertebrateTemplate(state.template)) {
-      if (state.strainBreed) {
-        table.columns.push(this.createStrainBreedColumn(state, columnPosition++));
-      }
-      if (state.developmentalStage) {
-        table.columns.push(this.createDevelopmentalStageColumn(state, columnPosition++));
-      }
+    if (
+      charCols.some(c => c.name.toLowerCase() === 'characteristics[cell line]') &&
+      (shouldEmit('characteristics[cell line]', 'required') ||
+        this.hasCharacteristicOutputValue(state, 'characteristics[cell line]'))
+    ) {
+      emitSpecialty('characteristics[cell line]', this.createCellLineColumn(state, columnPosition++));
+    } else if (
+      !hasMeta &&
+      (hasCellLinesExperiment(state) || isCellLineTemplate(sampleTemplate))
+    ) {
+      emitSpecialty('characteristics[cell line]', this.createCellLineColumn(state, columnPosition++));
     }
 
-    if (isPlantTemplate(state.template)) {
-      if (state.strainBreed) {
-        table.columns.push(this.createStrainBreedColumn(state, columnPosition++));
-      }
-      if (state.developmentalStage) {
-        table.columns.push(this.createDevelopmentalStageColumn(state, columnPosition++));
-      }
+    if (
+      shouldEmit('characteristics[strain/breed]', 'required') ||
+      this.hasCharacteristicOutputValue(state, 'characteristics[strain/breed]')
+    ) {
+      emitSpecialty('characteristics[strain/breed]', this.createStrainBreedColumn(state, columnPosition++));
+    }
+    if (
+      shouldEmit('characteristics[developmental stage]', 'required') ||
+      this.hasCharacteristicOutputValue(state, 'characteristics[developmental stage]')
+    ) {
+      emitSpecialty(
+        'characteristics[developmental stage]',
+        this.createDevelopmentalStageColumn(state, columnPosition++)
+      );
     }
 
-    // Add any dynamic column defaults from template
-    for (const colDefault of state.dynamicColumnDefaults) {
-      // Skip columns we already handle explicitly
-      const handled = ['organism', 'disease', 'organism part', 'sex', 'age', 'cell line', 'strain', 'developmental stage'];
-      if (handled.some(h => colDefault.columnName.includes(h))) {
+    // Remaining characteristics from meta / dynamic defaults
+    for (const meta of charCols) {
+      const lower = meta.name.toLowerCase();
+      if (emitted.has(lower)) continue;
+      if (meta.requirement === 'recommended' && !this.hasCharacteristicOutputValue(state, meta.name)) {
         continue;
       }
-      table.columns.push(this.createDynamicColumn(colDefault, columnPosition++));
+      if (meta.requirement !== 'required' && meta.requirement !== 'recommended') {
+        continue;
+      }
+      table.columns.push(this.createDynamicCharacteristicColumn(state, meta.name, columnPosition++));
+      emitted.add(lower);
+    }
+
+    // Dynamic defaults not already emitted
+    for (const colDefault of state.dynamicColumnDefaults) {
+      if (!colDefault.columnName.toLowerCase().startsWith('characteristics[')) continue;
+      if (emitted.has(colDefault.columnName.toLowerCase())) continue;
+      if (isWizardSkippedCharacteristic(colDefault.columnName)) continue;
+      table.columns.push(this.createDynamicCharacteristicColumn(state, colDefault.columnName, columnPosition++));
+      emitted.add(colDefault.columnName.toLowerCase());
     }
 
     // Biological replicate
     table.columns.push(this.createBiologicalReplicateColumn(state, columnPosition++));
 
-    // Assay columns
+    // Assay / technology (data section — use comment priority for column ordering)
     table.columns.push(this.createAssayNameColumn(state, columnPosition++));
     table.columns.push(this.createTechnologyTypeColumn(columnPosition++));
 
-    // Technical columns
+    // Technical columns (always emit tech replicate — SDRF requires the column even when all = 1)
     table.columns.push(this.createFractionColumn(state, columnPosition++));
     table.columns.push(this.createLabelColumn(state, columnPosition++));
     table.columns.push(this.createDataAcquisitionMethodColumn(state, columnPosition++));
-
-    if (state.technicalReplicates > 1) {
-      table.columns.push(this.createTechnicalReplicateColumn(state, columnPosition++));
-    }
+    table.columns.push(this.createTechnicalReplicateColumn(state, columnPosition++));
 
     // Instrument & Protocol
     table.columns.push(this.createInstrumentColumn(state, columnPosition++));
@@ -112,8 +182,20 @@ export class WizardGeneratorService {
       table.columns.push(this.createModificationColumn(mod, columnPosition++));
     }
 
-    // Data file (last)
+    // Data file
     table.columns.push(this.createDataFileColumn(state, columnPosition++));
+
+    // Versioning metadata
+    table.columns.push(this.createSdrfVersionColumn(columnPosition++));
+    for (const templateCol of this.createSdrfTemplateColumns(state, columnPosition)) {
+      table.columns.push(templateCol);
+      columnPosition++;
+    }
+
+    // Factor values (after data section)
+    for (const factor of state.factors.filter(f => f.enabled && f.name.trim())) {
+      table.columns.push(this.createFactorColumn(state, factor, columnPosition++));
+    }
 
     return table;
   }
@@ -122,49 +204,43 @@ export class WizardGeneratorService {
    * Calculate total row count based on samples, fractions, and replicates.
    */
   private calculateRowCount(state: WizardState): number {
-    const labelConfig = LABEL_CONFIGS.find(c => c.id === state.labelConfigId);
-    const isMultiplexed = labelConfig && labelConfig.id !== 'lf';
+    return Math.max(1, buildWizardExpansionRows(state).length);
+  }
 
-    if (isMultiplexed) {
-      // For multiplexed, rows = files (samples share runs)
-      const fractions = state.hasFractions ? state.fractionCount : 1;
-      const techReps = state.technicalReplicates;
-      // Simplified: one row per sample per fraction per tech replicate
-      return state.samples.length * fractions * techReps;
-    } else {
-      // For label-free, rows = samples × fractions × tech replicates
-      const fractions = state.hasFractions ? state.fractionCount : 1;
-      const techReps = state.technicalReplicates;
-      return state.samples.length * fractions * techReps;
-    }
+  private findSample(state: WizardState, sampleIndex?: number): WizardSampleEntry | undefined {
+    if (sampleIndex == null) return undefined;
+    return state.samples.find(s => s.index === sampleIndex);
+  }
+
+  /** Build modifiers from expansion rows; omit values equal to defaultValue when provided. */
+  private modsFromRows(
+    getValue: (row: WizardExpansionRow) => string,
+    defaultValue?: string
+  ): { value: string; modifiers: Modifier[] } {
+    const built = buildModifiersFromExpansion(this.expansionRows, getValue, defaultValue);
+    return {
+      value: built.value,
+      modifiers: built.modifiers as Modifier[],
+    };
+  }
+
+  private termOrStringValue(
+    value: { label: string } | string | null | undefined,
+    fallback = 'not available'
+  ): string {
+    if (value == null) return fallback;
+    if (typeof value === 'string') return value;
+    return value.label.toLowerCase();
   }
 
   // ============ Column Generators ============
 
   private createSourceNameColumn(state: WizardState, position: number): SdrfColumn {
-    const modifiers: Modifier[] = [];
-    let rowIndex = 1;
-
-    for (const sample of state.samples) {
-      const fractions = state.hasFractions ? state.fractionCount : 1;
-      const techReps = state.technicalReplicates;
-      const rowsPerSample = fractions * techReps;
-
-      if (rowsPerSample === 1) {
-        modifiers.push({ samples: String(rowIndex), value: sample.sourceName });
-      } else {
-        modifiers.push({
-          samples: `${rowIndex}-${rowIndex + rowsPerSample - 1}`,
-          value: sample.sourceName,
-        });
-      }
-      rowIndex += rowsPerSample;
-    }
-
+    const { value, modifiers } = this.modsFromRows(r => r.sourceName);
     return {
       name: 'source name',
       type: 'source_name',
-      value: state.samples[0]?.sourceName || '',
+      value: value || state.samples[0]?.sourceName || '',
       modifiers,
       columnPosition: position,
       isRequired: true,
@@ -175,12 +251,21 @@ export class WizardGeneratorService {
     const value = state.organism
       ? state.organism.label.toLowerCase()
       : 'not available';
+    const { modifiers } = this.modsFromRows(row => {
+      const sample = this.findSample(state, row.sampleIndex);
+      const sampleOrg = sample?.organism
+        ? typeof sample.organism === 'string'
+          ? sample.organism
+          : sample.organism.label.toLowerCase()
+        : '';
+      return sampleOrg || value;
+    }, value);
 
     return {
       name: 'characteristics[organism]',
       type: 'characteristics',
       value,
-      modifiers: [],
+      modifiers,
       columnPosition: position,
       isRequired: true,
       ontologyType: 'ncbitaxon',
@@ -188,36 +273,16 @@ export class WizardGeneratorService {
   }
 
   private createDiseaseColumn(state: WizardState, position: number): SdrfColumn {
-    let defaultValue = 'not available';
-    if (state.disease === 'normal' || state.disease === null) {
-      defaultValue = state.disease === 'normal' ? 'normal' : 'not available';
-    } else if (typeof state.disease === 'object') {
-      defaultValue = state.disease.label.toLowerCase();
-    }
-
-    // Check for sample-specific diseases
-    const modifiers: Modifier[] = [];
-    let rowIndex = 1;
-
-    for (const sample of state.samples) {
-      const fractions = state.hasFractions ? state.fractionCount : 1;
-      const techReps = state.technicalReplicates;
-      const rowsPerSample = fractions * techReps;
-
-      if (sample.disease && sample.disease !== state.disease) {
-        const sampleDisease = typeof sample.disease === 'string'
+    const defaultValue = this.termOrStringValue(state.disease);
+    const { modifiers } = this.modsFromRows(row => {
+      const sample = this.findSample(state, row.sampleIndex);
+      if (sample?.disease) {
+        return typeof sample.disease === 'string'
           ? sample.disease
           : sample.disease.label.toLowerCase();
-
-        modifiers.push({
-          samples: rowsPerSample === 1
-            ? String(rowIndex)
-            : `${rowIndex}-${rowIndex + rowsPerSample - 1}`,
-          value: sampleDisease,
-        });
       }
-      rowIndex += rowsPerSample;
-    }
+      return defaultValue;
+    }, defaultValue);
 
     return {
       name: 'characteristics[disease]',
@@ -231,41 +296,49 @@ export class WizardGeneratorService {
   }
 
   private createOrganismPartColumn(state: WizardState, position: number): SdrfColumn {
-    const value = state.organismPart
-      ? state.organismPart.label.toLowerCase()
-      : 'not available';
+    const value = this.termOrStringValue(state.organismPart);
+    const { modifiers } = this.modsFromRows(row => {
+      const sample = this.findSample(state, row.sampleIndex);
+      const samplePart = sample?.organismPart
+        ? typeof sample.organismPart === 'string'
+          ? sample.organismPart
+          : sample.organismPart.label.toLowerCase()
+        : '';
+      return samplePart || value;
+    }, value);
 
     return {
       name: 'characteristics[organism part]',
       type: 'characteristics',
       value,
-      modifiers: [],
+      modifiers,
       columnPosition: position,
       isRequired: true,
       ontologyType: 'uberon',
     };
   }
 
+  private createMaterialTypeColumn(
+    sampleTemplate: string | null,
+    experimentTemplates: string[],
+    position: number
+  ): SdrfColumn {
+    return {
+      name: 'characteristics[material type]',
+      type: 'characteristics',
+      value: getDefaultMaterialType(sampleTemplate, experimentTemplates),
+      modifiers: [],
+      columnPosition: position,
+      isRequired: true,
+    };
+  }
+
   private createSexColumn(state: WizardState, position: number): SdrfColumn {
     const defaultValue = state.defaultSex || 'not available';
-    const modifiers: Modifier[] = [];
-    let rowIndex = 1;
-
-    for (const sample of state.samples) {
-      const fractions = state.hasFractions ? state.fractionCount : 1;
-      const techReps = state.technicalReplicates;
-      const rowsPerSample = fractions * techReps;
-
-      if (sample.sex && sample.sex !== state.defaultSex) {
-        modifiers.push({
-          samples: rowsPerSample === 1
-            ? String(rowIndex)
-            : `${rowIndex}-${rowIndex + rowsPerSample - 1}`,
-          value: sample.sex,
-        });
-      }
-      rowIndex += rowsPerSample;
-    }
+    const { modifiers } = this.modsFromRows(row => {
+      const sample = this.findSample(state, row.sampleIndex);
+      return sample?.sex || defaultValue;
+    }, defaultValue);
 
     return {
       name: 'characteristics[sex]',
@@ -278,24 +351,10 @@ export class WizardGeneratorService {
 
   private createAgeColumn(state: WizardState, position: number): SdrfColumn {
     const defaultValue = state.defaultAge || 'not available';
-    const modifiers: Modifier[] = [];
-    let rowIndex = 1;
-
-    for (const sample of state.samples) {
-      const fractions = state.hasFractions ? state.fractionCount : 1;
-      const techReps = state.technicalReplicates;
-      const rowsPerSample = fractions * techReps;
-
-      if (sample.age && sample.age !== state.defaultAge) {
-        modifiers.push({
-          samples: rowsPerSample === 1
-            ? String(rowIndex)
-            : `${rowIndex}-${rowIndex + rowsPerSample - 1}`,
-          value: sample.age,
-        });
-      }
-      rowIndex += rowsPerSample;
-    }
+    const { modifiers } = this.modsFromRows(row => {
+      const sample = this.findSample(state, row.sampleIndex);
+      return sample?.age || defaultValue;
+    }, defaultValue);
 
     return {
       name: 'characteristics[age]',
@@ -308,24 +367,10 @@ export class WizardGeneratorService {
 
   private createCellLineColumn(state: WizardState, position: number): SdrfColumn {
     const defaultValue = state.defaultCellLine || 'not applicable';
-    const modifiers: Modifier[] = [];
-    let rowIndex = 1;
-
-    for (const sample of state.samples) {
-      const fractions = state.hasFractions ? state.fractionCount : 1;
-      const techReps = state.technicalReplicates;
-      const rowsPerSample = fractions * techReps;
-
-      if (sample.cellLine && sample.cellLine !== state.defaultCellLine) {
-        modifiers.push({
-          samples: rowsPerSample === 1
-            ? String(rowIndex)
-            : `${rowIndex}-${rowIndex + rowsPerSample - 1}`,
-          value: sample.cellLine,
-        });
-      }
-      rowIndex += rowsPerSample;
-    }
+    const { modifiers } = this.modsFromRows(row => {
+      const sample = this.findSample(state, row.sampleIndex);
+      return sample?.cellLine || defaultValue;
+    }, defaultValue);
 
     return {
       name: 'characteristics[cell line]',
@@ -357,59 +402,34 @@ export class WizardGeneratorService {
   }
 
   private createBiologicalReplicateColumn(state: WizardState, position: number): SdrfColumn {
-    const modifiers: Modifier[] = [];
-    let rowIndex = 1;
-
-    for (const sample of state.samples) {
-      const fractions = state.hasFractions ? state.fractionCount : 1;
-      const techReps = state.technicalReplicates;
-      const rowsPerSample = fractions * techReps;
-
-      modifiers.push({
-        samples: rowsPerSample === 1
-          ? String(rowIndex)
-          : `${rowIndex}-${rowIndex + rowsPerSample - 1}`,
-        value: String(sample.biologicalReplicate),
-      });
-      rowIndex += rowsPerSample;
-    }
-
+    const { value, modifiers } = this.modsFromRows(r => String(r.biologicalReplicate));
     return {
       name: 'characteristics[biological replicate]',
       type: 'characteristics',
-      value: '1',
+      value: value || '1',
       modifiers,
       columnPosition: position,
     };
   }
 
   private createAssayNameColumn(state: WizardState, position: number): SdrfColumn {
-    const modifiers: Modifier[] = [];
-    let rowIndex = 1;
-
-    for (const sample of state.samples) {
-      const fractions = state.hasFractions ? state.fractionCount : 1;
-      const techReps = state.technicalReplicates;
-
-      for (let f = 1; f <= fractions; f++) {
-        for (let r = 1; r <= techReps; r++) {
-          let assayName = sample.sourceName;
-          if (fractions > 1) assayName += `_F${f}`;
-          if (techReps > 1) assayName += `_R${r}`;
-
-          modifiers.push({
-            samples: String(rowIndex),
-            value: assayName,
-          });
-          rowIndex++;
-        }
+    const { value, modifiers } = this.modsFromRows(row => {
+      const parts = [row.sourceName];
+      if (row.fractionId > 1 || this.expansionRows.some(r => r.fractionId > 1)) {
+        parts.push(`F${row.fractionId}`);
       }
-    }
-
+      if (row.technicalReplicate > 1 || this.expansionRows.some(r => r.technicalReplicate > 1)) {
+        parts.push(`R${row.technicalReplicate}`);
+      }
+      if (row.label && row.label !== 'label free sample') {
+        parts.push(row.label.replace(/\s+/g, ''));
+      }
+      return parts.join('_');
+    });
     return {
       name: 'assay name',
-      type: 'special',
-      value: modifiers[0]?.value || '',
+      type: 'comment',
+      value: value || 'assay',
       modifiers,
       columnPosition: position,
       isRequired: true,
@@ -419,7 +439,7 @@ export class WizardGeneratorService {
   private createTechnologyTypeColumn(position: number): SdrfColumn {
     return {
       name: 'technology type',
-      type: 'special',
+      type: 'comment',
       value: 'proteomic profiling by mass spectrometry',
       modifiers: [],
       columnPosition: position,
@@ -428,15 +448,15 @@ export class WizardGeneratorService {
   }
 
   private createDataAcquisitionMethodColumn(state: WizardState, position: number): SdrfColumn {
-    // Use the acquisition method from state, default to DDA
     const method = state.acquisitionMethod || 'dda';
 
-    let value: string;
-    if (method === 'dia') {
-      value = 'NT=Data-independent acquisition;AC=PRIDE:0000450';
-    } else {
-      value = 'NT=Data-dependent acquisition;AC=PRIDE:0000627';
-    }
+    const byMethod: Record<string, string> = {
+      dia: 'NT=Data-independent acquisition;AC=PRIDE:0000450',
+      dda: 'NT=Data-dependent acquisition;AC=PRIDE:0000627',
+      prm: 'NT=Parallel reaction monitoring;AC=PRIDE:0000629',
+      srm: 'NT=Selected reaction monitoring;AC=PRIDE:0000630',
+    };
+    const value = byMethod[method] || byMethod['dda'];
 
     return {
       name: 'comment[proteomics data acquisition method]',
@@ -449,122 +469,52 @@ export class WizardGeneratorService {
   }
 
   private createFractionColumn(state: WizardState, position: number): SdrfColumn {
-    // If no fractionation, return a single value for all rows
-    if (!state.hasFractions || state.fractionCount <= 1) {
-      return {
-        name: 'comment[fraction identifier]',
-        type: 'comment',
-        value: '1',
-        modifiers: [],
-        columnPosition: position,
-        isRequired: true,
-      };
-    }
-
-    // With fractionation, assign fraction numbers per row
-    const modifiers: Modifier[] = [];
-    let rowIndex = 1;
-
-    for (const sample of state.samples) {
-      for (let f = 1; f <= state.fractionCount; f++) {
-        for (let r = 1; r <= state.technicalReplicates; r++) {
-          modifiers.push({
-            samples: String(rowIndex),
-            value: String(f),
-          });
-          rowIndex++;
-        }
-      }
-    }
-
+    const { value, modifiers } = this.modsFromRows(r => String(r.fractionId));
+    const allOne = this.expansionRows.length === 0 || this.expansionRows.every(r => r.fractionId === 1);
     return {
       name: 'comment[fraction identifier]',
       type: 'comment',
-      value: '1',
-      modifiers,
+      value: value || '1',
+      modifiers: allOne ? [] : modifiers,
       columnPosition: position,
       isRequired: true,
     };
   }
 
   private createLabelColumn(state: WizardState, position: number): SdrfColumn {
-    const labelConfig = LABEL_CONFIGS.find(c => c.id === state.labelConfigId);
-    const labels = state.customLabels.length > 0
-      ? state.customLabels
-      : labelConfig?.labels || ['label free sample'];
-
-    // For label-free, all rows have the same label
-    if (labelConfig?.id === 'lf' || labels.length === 1) {
-      return {
-        name: 'comment[label]',
-        type: 'comment',
-        value: labels[0],
-        modifiers: [],
-        columnPosition: position,
-        isRequired: true,
-      };
-    }
-
-    // For multiplexed, assign labels to samples
-    const modifiers: Modifier[] = [];
-    let rowIndex = 1;
-
-    for (let i = 0; i < state.samples.length; i++) {
-      const label = labels[i % labels.length];
-      const fractions = state.hasFractions ? state.fractionCount : 1;
-      const techReps = state.technicalReplicates;
-      const rowsPerSample = fractions * techReps;
-
-      modifiers.push({
-        samples: rowsPerSample === 1
-          ? String(rowIndex)
-          : `${rowIndex}-${rowIndex + rowsPerSample - 1}`,
-        value: label,
-      });
-      rowIndex += rowsPerSample;
-    }
-
+    const { value, modifiers } = this.modsFromRows(r => r.label);
+    const allSame =
+      this.expansionRows.length === 0 ||
+      this.expansionRows.every(r => r.label === this.expansionRows[0].label);
     return {
       name: 'comment[label]',
       type: 'comment',
-      value: labels[0],
-      modifiers,
+      value: value || 'label free sample',
+      modifiers: allSame ? [] : modifiers,
       columnPosition: position,
       isRequired: true,
     };
   }
 
   private createTechnicalReplicateColumn(state: WizardState, position: number): SdrfColumn {
-    const modifiers: Modifier[] = [];
-    let rowIndex = 1;
-
-    for (const sample of state.samples) {
-      const fractions = state.hasFractions ? state.fractionCount : 1;
-
-      for (let f = 1; f <= fractions; f++) {
-        for (let r = 1; r <= state.technicalReplicates; r++) {
-          modifiers.push({
-            samples: String(rowIndex),
-            value: String(r),
-          });
-          rowIndex++;
-        }
-      }
-    }
-
+    const { value, modifiers } = this.modsFromRows(r => String(r.technicalReplicate));
     return {
       name: 'comment[technical replicate]',
       type: 'comment',
-      value: '1',
+      value: value || '1',
       modifiers,
       columnPosition: position,
+      isRequired: true,
     };
   }
 
   private createInstrumentColumn(state: WizardState, position: number): SdrfColumn {
-    const value = state.instrument
-      ? state.instrument.label
-      : 'not available';
+    let value = 'not available';
+    if (state.instrument) {
+      value = state.instrument.id
+        ? `NT=${state.instrument.label};AC=${state.instrument.id}`
+        : state.instrument.label;
+    }
 
     return {
       name: 'comment[instrument]',
@@ -593,13 +543,16 @@ export class WizardGeneratorService {
     };
   }
 
-  private createModificationColumn(
-    mod: { name: string; targetAminoAcids: string; type: 'fixed' | 'variable'; unimodAccession?: string },
-    position: number
-  ): SdrfColumn {
-    const parts = [`NT=${mod.name}`, `MT=${mod.type}`, `TA=${mod.targetAminoAcids}`];
+  private createModificationColumn(mod: WizardModification, position: number): SdrfColumn {
+    // Spec order: NT → AC → remaining keys (MT, TA, PP, ...)
+    const parts = [`NT=${mod.name}`];
     if (mod.unimodAccession) {
       parts.push(`AC=${mod.unimodAccession}`);
+    }
+    parts.push(`MT=${mod.type}`);
+    parts.push(`TA=${mod.targetAminoAcids}`);
+    if (mod.position) {
+      parts.push(`PP=${mod.position}`);
     }
 
     return {
@@ -613,55 +566,77 @@ export class WizardGeneratorService {
   }
 
   private createDataFileColumn(state: WizardState, position: number): SdrfColumn {
-    const modifiers: Modifier[] = [];
-
-    if (state.dataFiles.length > 0) {
-      for (let i = 0; i < state.dataFiles.length; i++) {
-        modifiers.push({
-          samples: String(i + 1),
-          value: state.dataFiles[i].fileName,
-        });
-      }
-    } else {
-      // Auto-generate from pattern
-      let rowIndex = 1;
-      for (const sample of state.samples) {
-        const fractions = state.hasFractions ? state.fractionCount : 1;
-        const techReps = state.technicalReplicates;
-
-        for (let f = 1; f <= fractions; f++) {
-          for (let r = 1; r <= techReps; r++) {
-            let fileName = state.fileNamingPattern
-              .replace('{sourceName}', sample.sourceName)
-              .replace('{fraction}', `F${f}`)
-              .replace('{replicate}', `R${r}`)
-              .replace('{n}', String(sample.index));
-
-            modifiers.push({
-              samples: String(rowIndex),
-              value: fileName,
-            });
-            rowIndex++;
-          }
-        }
-      }
-    }
-
+    const { value, modifiers } = this.modsFromRows(r => r.fileName);
     return {
       name: 'comment[data file]',
       type: 'comment',
-      value: modifiers[0]?.value || 'data.raw',
+      value: value || 'data.raw',
       modifiers,
       columnPosition: position,
       isRequired: true,
     };
   }
 
-  /**
-   * Create a column from a dynamic column default.
-   */
+  private createSdrfVersionColumn(position: number): SdrfColumn {
+    // Validator expects semantic version with leading "v" (e.g. v3.0.0), not 3.0.0
+    return {
+      name: 'comment[sdrf version]',
+      type: 'comment',
+      value: formatSdrfSemver(SDRF_SPEC_VERSION),
+      modifiers: [],
+      columnPosition: position,
+    };
+  }
+
+  private createSdrfTemplateColumns(state: WizardState, startPosition: number): SdrfColumn[] {
+    const leaves = this.templateService.getLeafTemplateIds({
+      technologyTemplate: state.technologyTemplate,
+      sampleTemplate: getSampleTemplateId(state),
+      experimentTemplates: state.experimentTemplates || [],
+    });
+
+    if (leaves.length === 0) {
+      leaves.push('ms-proteomics');
+    }
+
+    return leaves.map((name, i) => {
+      const version = formatSdrfSemver(
+        this.templateService.getTemplateVersion(name) || SDRF_SPEC_VERSION
+      );
+      return {
+        name: 'comment[sdrf template]',
+        type: 'comment' as ColumnType,
+        // Spec preferred simple format: "template_name vX.Y.Z"
+        value: `${name} ${version}`,
+        modifiers: [],
+        columnPosition: startPosition + i,
+      };
+    });
+  }
+
+  private createFactorColumn(
+    state: WizardState,
+    factor: WizardFactor,
+    position: number
+  ): SdrfColumn {
+    const name = `factor value[${factor.name.trim()}]`;
+    const candidates = factor.values || [];
+    const defaultValue = candidates[0] || 'not available';
+    const modifiers = this.modsFromRows(row => {
+      const sample = this.findSample(state, row.sampleIndex);
+      return sample?.factorValues?.[factor.name]?.trim() || defaultValue;
+    }, defaultValue).modifiers;
+
+    return {
+      name,
+      type: 'factor_value',
+      value: defaultValue,
+      modifiers,
+      columnPosition: position,
+    };
+  }
+
   private createDynamicColumn(colDefault: DynamicColumnDefault, position: number): SdrfColumn {
-    // Determine column type from name
     let type: ColumnType = 'comment';
     if (colDefault.columnName.startsWith('characteristics[')) {
       type = 'characteristics';
@@ -674,6 +649,72 @@ export class WizardGeneratorService {
       type,
       value: colDefault.value,
       modifiers: [],
+      columnPosition: position,
+    };
+  }
+
+  private hasCharacteristicOutputValue(state: WizardState, columnName: string): boolean {
+    const key = getSpecialtyCharacteristicKey(columnName);
+    switch (key) {
+      case 'organism':
+        return !!(
+          state.organism ||
+          state.samples.some(s => !!s.organism)
+        );
+      case 'disease':
+        return !!(
+          (typeof state.disease === 'string' && state.disease.trim()) ||
+          (typeof state.disease === 'object' && state.disease?.label) ||
+          state.samples.some(s => !!s.disease)
+        );
+      case 'organism part':
+        return !!(
+          (typeof state.organismPart === 'string' && state.organismPart.trim()) ||
+          (typeof state.organismPart === 'object' && state.organismPart?.label) ||
+          state.samples.some(s => !!s.organismPart)
+        );
+      case 'sex':
+        return !!(state.defaultSex || state.samples.some(s => !!s.sex));
+      case 'age':
+        return !!(state.defaultAge?.trim() || state.samples.some(s => !!s.age?.trim()));
+      case 'cell line':
+        return !!(
+          state.defaultCellLine?.trim() ||
+          state.samples.some(s => !!s.cellLine?.trim())
+        );
+      case 'strain/breed':
+        return !!state.strainBreed?.trim();
+      case 'developmental stage':
+        return !!state.developmentalStage?.trim();
+      default: {
+        const def = state.dynamicColumnDefaults.find(d => d.columnName === columnName);
+        if (def?.value?.trim()) return true;
+        return state.samples.some(
+          s => !!s.customCharacteristics?.[columnName]?.trim()
+        );
+      }
+    }
+  }
+
+  private createDynamicCharacteristicColumn(
+    state: WizardState,
+    columnName: string,
+    position: number
+  ): SdrfColumn {
+    const def = state.dynamicColumnDefaults.find(d => d.columnName === columnName);
+    const defaultValue = def?.value?.trim() || 'not available';
+    const { modifiers } = this.modsFromRows(row => {
+      const sample = this.findSample(state, row.sampleIndex);
+      const override = sample?.customCharacteristics?.[columnName]?.trim();
+      const fromChoices = sample?.characteristicValues?.[columnName]?.trim();
+      return override || fromChoices || defaultValue;
+    }, defaultValue);
+
+    return {
+      name: columnName,
+      type: 'characteristics',
+      value: defaultValue,
+      modifiers,
       columnPosition: position,
     };
   }

@@ -31,6 +31,42 @@ export type TemplateLayer = 'technology' | 'sample' | 'experiment';
 export type ColumnCardinality = 'single' | 'multiple';
 
 /**
+ * A requirement constraint from templates.yaml (requires:).
+ */
+export interface TemplateRequirement {
+  /** Required layer (e.g. "sample", "technology") */
+  layer?: TemplateLayer;
+  /** Required specific template name */
+  template?: string;
+}
+
+/**
+ * Exclusion constraints from templates.yaml (excludes:).
+ */
+export interface TemplateExclusions {
+  /** Template names that cannot be combined with this one */
+  templates?: string[];
+}
+
+/**
+ * Selection used for combination validation.
+ */
+export interface TemplateSelection {
+  technologyTemplate: string | null;
+  sampleTemplate: string | null;
+  experimentTemplates: string[];
+}
+
+/**
+ * Result of combination validation.
+ */
+export interface TemplateCombinationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+/**
  * Parameters for a template validator.
  */
 export interface TemplateValidatorParams {
@@ -108,6 +144,10 @@ export interface TemplateDefinition {
   usableAlone: boolean;
   /** Template layer (technology, sample, experiment) */
   layer: TemplateLayer | null;
+  /** Layer/template requirements for combination */
+  requires?: TemplateRequirement[];
+  /** Templates that cannot be combined with this one */
+  excludes?: TemplateExclusions;
   /** Templates that are mutually exclusive with this one */
   mutuallyExclusiveWith?: string[];
   /** Template-level validators */
@@ -144,6 +184,10 @@ export interface TemplateManifestEntry {
   usableAlone: boolean;
   /** Template layer */
   layer: TemplateLayer | null;
+  /** Combination requirements */
+  requires?: TemplateRequirement[];
+  /** Exclusion constraints */
+  excludes?: TemplateExclusions;
   /** Template status */
   status: 'stable' | 'development';
   /** Description */
@@ -183,10 +227,58 @@ export interface TemplateInfo {
   usableAlone: boolean;
   /** Parent template */
   extends: string | null;
+  /** Combination requirements */
+  requires?: TemplateRequirement[];
+  /** Exclusion constraints */
+  excludes?: TemplateExclusions;
   /** Icon for UI (derived from template name) */
   icon?: string;
   /** Status */
   status?: 'stable' | 'development';
+  /** Latest version from manifest when available */
+  version?: string;
+}
+
+/**
+ * Parse requires array from YAML.
+ */
+export function parseTemplateRequires(raw: unknown): TemplateRequirement[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  return raw.map((item: any) => ({
+    layer: item?.layer || undefined,
+    template: item?.template || undefined,
+  }));
+}
+
+/**
+ * Parse excludes object from YAML.
+ */
+export function parseTemplateExcludes(raw: unknown): TemplateExclusions | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const templates = (raw as any).templates;
+  if (!Array.isArray(templates) || templates.length === 0) return undefined;
+  return { templates: templates.map(String) };
+}
+
+/**
+ * Whether a template is considered development / unstable for UI folding.
+ */
+export function isDevelopmentTemplate(info: Pick<TemplateInfo, 'id' | 'status' | 'version'>): boolean {
+  if (info.status === 'development') return true;
+  const version = info.version || '';
+  return version.includes('dev') || info.id.includes('metabolomics');
+}
+
+/**
+ * Parse parent template id from extends field.
+ * Official YAML uses forms like "sample-metadata@>=1.0.0" or plain "ms-proteomics".
+ */
+export function parseExtendsTemplateName(extendsValue: string | null | undefined): string | null {
+  if (!extendsValue) return null;
+  const trimmed = extendsValue.trim();
+  if (!trimmed) return null;
+  const at = trimmed.indexOf('@');
+  return at >= 0 ? trimmed.slice(0, at) : trimmed;
 }
 
 /**
@@ -200,10 +292,16 @@ export function convertYamlToTemplateDefinition(yaml: any): TemplateDefinition {
     extends: yaml.extends || null,
     usableAlone: yaml.usable_alone ?? false,
     layer: yaml.layer || null,
+    requires: parseTemplateRequires(yaml.requires),
+    excludes: parseTemplateExcludes(yaml.excludes),
     mutuallyExclusiveWith: yaml.mutually_exclusive_with,
     status: yaml.status,
-    validators: yaml.validators?.map((v: any) => convertYamlToValidator(v)),
-    columns: yaml.columns?.map((c: any) => convertYamlToColumn(c)) || [],
+    validators: Array.isArray(yaml.validators)
+      ? yaml.validators.map((v: any) => convertYamlToValidator(v))
+      : undefined,
+    columns: Array.isArray(yaml.columns)
+      ? yaml.columns.map((c: any) => convertYamlToColumn(c))
+      : [],
   };
 }
 
@@ -213,15 +311,17 @@ export function convertYamlToTemplateDefinition(yaml: any): TemplateDefinition {
 function convertYamlToColumn(yaml: any): TemplateColumn {
   return {
     name: yaml.name,
-    description: yaml.description,
-    requirement: yaml.requirement,
+    description: yaml.description || '',
+    requirement: yaml.requirement || 'optional',
     allowNotApplicable: yaml.allow_not_applicable,
     allowNotAvailable: yaml.allow_not_available,
     allowAnonymized: yaml.allow_anonymized,
     allowPooled: yaml.allow_pooled,
     cardinality: yaml.cardinality,
     type: yaml.type,
-    validators: yaml.validators?.map((v: any) => convertYamlToValidator(v)),
+    validators: Array.isArray(yaml.validators)
+      ? yaml.validators.map((v: any) => convertYamlToValidator(v))
+      : undefined,
   };
 }
 
@@ -251,22 +351,123 @@ function convertYamlToValidator(yaml: any): TemplateValidator {
  */
 export function getTemplateIcon(templateId: string): string {
   const iconMap: Record<string, string> = {
-    'human': 'person',
+    human: 'person',
     'cell-lines': 'science',
-    'vertebrates': 'pets',
-    'invertebrates': 'bug_report',
-    'plants': 'eco',
+    vertebrates: 'pets',
+    invertebrates: 'bug_report',
+    plants: 'eco',
     'ms-proteomics': 'analytics',
     'affinity-proteomics': 'biotech',
+    'ms-metabolomics': 'science',
     'dia-acquisition': 'assessment',
     'single-cell': 'grain',
-    'crosslinking': 'link',
-    'immunopeptidomics': 'vaccines',
-    'metaproteomics': 'diversity_3',
-    'olink': 'hub',
-    'somascan': 'developer_board',
+    crosslinking: 'link',
+    immunopeptidomics: 'vaccines',
+    metaproteomics: 'diversity_3',
+    'clinical-metadata': 'medical_services',
+    'oncology-metadata': 'coronavirus',
+    'human-gut': 'accessibility',
+    soil: 'landscape',
+    water: 'water_drop',
+    'lc-ms-metabolomics': 'biotech',
+    'gc-ms-metabolomics': 'biotech',
+    olink: 'hub',
+    somascan: 'developer_board',
   };
   return iconMap[templateId] || 'category';
+}
+
+/**
+ * Emoji used on wizard template cards.
+ */
+export function getTemplateEmoji(templateId: string): string {
+  const emojiMap: Record<string, string> = {
+    human: '🧑',
+    'cell-lines': '🧫',
+    vertebrates: '🐁',
+    invertebrates: '🪲',
+    plants: '🌱',
+    'ms-proteomics': '📊',
+    'affinity-proteomics': '🧪',
+    'ms-metabolomics': '⚗️',
+    'dia-acquisition': '📈',
+    'single-cell': '🧬',
+    crosslinking: '🔗',
+    immunopeptidomics: '💉',
+    metaproteomics: '🦠',
+    'clinical-metadata': '🏥',
+    'oncology-metadata': '🎗️',
+    'human-gut': '🫁',
+    soil: '🪴',
+    water: '💧',
+    'lc-ms-metabolomics': '⚗️',
+    'gc-ms-metabolomics': '⚗️',
+    olink: '🧪',
+    somascan: '🧪',
+  };
+  return emojiMap[templateId] || '📋';
+}
+
+/**
+ * Short card blurb for the wizard (keeps UI readable).
+ */
+export function getTemplateShortDescription(templateId: string): string {
+  const descMap: Record<string, string> = {
+    'ms-proteomics': 'Mass spectrometry proteomics (DDA, DIA, PRM, SRM).',
+    'affinity-proteomics': 'Protein assays such as Olink and SomaScan.',
+    'ms-metabolomics': 'Mass spectrometry metabolomics (development).',
+    human: 'Human clinical or patient-derived samples.',
+    vertebrates: 'Non-human vertebrates (mouse, rat, zebrafish, …).',
+    invertebrates: 'Invertebrates (Drosophila, C. elegans, insects, …).',
+    plants: 'Plant samples (Arabidopsis, crops, …).',
+    'clinical-metadata': 'Treatment, demographics, and lifestyle metadata.',
+    'oncology-metadata': 'Tumor staging, grading, and oncology outcomes.',
+    metaproteomics: 'Microbial community / metaproteomics samples.',
+    'human-gut': 'Human gut metaproteomics (MIxS human-gut).',
+    soil: 'Soil metaproteomics with environment metadata.',
+    water: 'Water / aquatic metaproteomics samples.',
+    'cell-lines': 'Cultured cell lines (HeLa, HEK293, …).',
+    'dia-acquisition': 'DIA-specific acquisition columns.',
+    'single-cell': 'Single-cell proteomics (SCP) columns.',
+    immunopeptidomics: 'MHC / HLA immunopeptidomics columns.',
+    crosslinking: 'Crosslinking MS (XL-MS) columns.',
+    'lc-ms-metabolomics': 'LC-MS metabolomics add-on columns.',
+    'gc-ms-metabolomics': 'GC-MS metabolomics add-on columns.',
+  };
+  return descMap[templateId] || '';
+}
+
+/**
+ * Display order within each layer — more common templates first.
+ * Lower number = earlier. Unknown templates sort after known ones.
+ */
+export function getTemplateSortOrder(templateId: string): number {
+  const order: Record<string, number> = {
+    // technology
+    'ms-proteomics': 10,
+    'affinity-proteomics': 20,
+    'ms-metabolomics': 30,
+    // sample
+    human: 10,
+    vertebrates: 20,
+    plants: 30,
+    invertebrates: 40,
+    'clinical-metadata': 50,
+    'oncology-metadata': 60,
+    metaproteomics: 70,
+    'human-gut': 80,
+    soil: 90,
+    water: 100,
+    // experiment
+    'cell-lines': 10,
+    'dia-acquisition': 20,
+    'single-cell': 30,
+    immunopeptidomics: 40,
+    crosslinking: 50,
+    'lc-ms-metabolomics': 60,
+    'gc-ms-metabolomics': 70,
+  };
+  return order[templateId] ?? 1000;
 }
 
 /**
@@ -274,20 +475,28 @@ export function getTemplateIcon(templateId: string): string {
  */
 export function getTemplateDisplayName(templateId: string): string {
   const nameMap: Record<string, string> = {
-    'human': 'Human Samples',
+    human: 'Human Samples',
     'cell-lines': 'Cell Lines',
-    'vertebrates': 'Vertebrates (Non-Human)',
-    'invertebrates': 'Invertebrates',
-    'plants': 'Plants',
+    vertebrates: 'Vertebrates (Non-Human)',
+    invertebrates: 'Invertebrates',
+    plants: 'Plants',
     'ms-proteomics': 'MS Proteomics',
     'affinity-proteomics': 'Affinity Proteomics',
+    'ms-metabolomics': 'MS Metabolomics',
     'dia-acquisition': 'DIA Acquisition',
     'single-cell': 'Single Cell',
-    'crosslinking': 'Crosslinking (XL-MS)',
-    'immunopeptidomics': 'Immunopeptidomics',
-    'metaproteomics': 'Metaproteomics',
-    'olink': 'Olink',
-    'somascan': 'SomaScan',
+    crosslinking: 'Crosslinking (XL-MS)',
+    immunopeptidomics: 'Immunopeptidomics',
+    metaproteomics: 'Metaproteomics',
+    'clinical-metadata': 'Clinical Metadata',
+    'oncology-metadata': 'Oncology Metadata',
+    'human-gut': 'Human Gut Metaproteomics',
+    soil: 'Soil Metaproteomics',
+    water: 'Water Metaproteomics',
+    'lc-ms-metabolomics': 'LC-MS Metabolomics',
+    'gc-ms-metabolomics': 'GC-MS Metabolomics',
+    olink: 'Olink',
+    somascan: 'SomaScan',
   };
   return nameMap[templateId] || templateId.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }

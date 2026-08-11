@@ -1,58 +1,110 @@
 # SDRF Editor
 
-[![License](https://img.shields.io/github/license/bigbio/sdrfedit)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/bigbio/sdrfedit?style=social)](https://github.com/bigbio/sdrfedit/stargazers)
-[![jsDelivr](https://data.jsdelivr.com/v1/package/gh/bigbio/sdrfedit/badge)](https://www.jsdelivr.com/package/gh/bigbio/sdrfedit)
+[![License](https://img.shields.io/github/license/2024-denglei/sdrfedit)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/2024-denglei/sdrfedit?style=social)](https://github.com/2024-denglei/sdrfedit/stargazers)
 
-Lightweight, self-hosted SDRF editing in the browser. `sdrfedit` helps create, edit, validate, and export Sample and Data Relationship Format files without requiring a backend.
+Browser-based editor for the Sample and Data Relationship Format (SDRF): create, edit, validate, and export proteomics sample–data relationship tables. This fork builds on [bigbio/sdrfedit](https://github.com/bigbio/sdrfedit) with an improved **6-step creation wizard** and an optional **wizard AI assistant**.
+
+For a longer Chinese walkthrough, see [USER.md](USER.md).
 
 ## Highlights
 
-- Browser-first SDRF editing with virtual scrolling for large tables
-- Guided SDRF creation wizard for building files from scratch
-- Ontology-aware cell editing with EBI OLS lookups
-- Validation through the deployed PRIDE SDRF validator API, with optional local browser validation via Pyodide
-- Optional AI-assisted recommendations for metadata cleanup and improvement
-- TSV and Excel export
+- **Main editor** — virtual scrolling for large tables, ontology-aware cells (EBI OLS), TSV / Excel export
+- **Creation wizard (6 steps)** — from templates to a draft SDRF ready for review
+- **Validation** — PRIDE SDRF Validator API by default; optional in-browser Pyodide / `sdrf-pipelines`
+- **Editor AI recommendations** (optional, frontend-only) — metadata cleanup with your own LLM key
+- **Wizard AI assistant** (optional, needs backend) — step-scoped suggestions as one-click Apply cards
 
-## Quick Start
+## Quick start
+
+### Frontend
 
 ```bash
 npm install
 ng serve
 ```
 
-Open `http://localhost:4200`.
+Open http://localhost:4200 .
 
-For a production build:
+Production build:
 
 ```bash
 npm run build
 ```
 
-## Validation
+Build output lives in `dist/` (committed so CDN / embed deployments stay in sync).
 
-The editor supports two validation modes:
+### Wizard AI backend (optional)
 
-- `PRIDE API`: the default path, using the deployed SDRF validator service from PRIDE
-- `Local browser`: runs `sdrf-pipelines` in the browser via Pyodide when users do not want to send the file out
+The assistant panel needs a small FastAPI service (LLM, MinerU, spec RAG, PRIDE / OLS, …):
 
-The local validator bundle is loaded from `src/assets/wheels/`, and the Pyodide worker lives in `src/app/workers/pyodide.worker.ts`.
+```bash
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env          # set LLM_API_KEY and related options
+python -m app.rag.build_index # build the specification vector index
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
 
-## AI Assistant
+Health check:
 
-The AI assistant is optional. It can suggest fixes for validation errors and improve metadata quality using OpenAI, Anthropic, Google Gemini, or a local Ollama instance.
+```bash
+curl http://127.0.0.1:8000/api/health
+```
 
-If you want stronger example-driven suggestions, you can build the local SDRF knowledge base:
+The frontend connects via `assistantBaseUrl` in `src/environments/environment.ts`. Embedded deployments can override with `window.__SDRF_ASSISTANT_URL__` or `localStorage.sdrf_assistant_url`. See [backend/README.md](backend/README.md) for LLM, embedding, and MinerU configuration.
+
+## Creation wizard (6 steps)
+
+| Step | What you fill |
+|------|----------------|
+| 1 Experiment Setup | Technology / sample / experiment templates + **biological sample count** |
+| 2 Sample Characteristics | Characteristic candidate values + **study factor names and all group labels** |
+| 3 Sample Values | Source names, biological replicates, multi-value characteristics, **per-sample factor picks** |
+| 4 Runs & Files | Plex kit, MS-run packing, raw-file pool, **file→run mapping with fraction / tech** |
+| 5 Instrument & Protocol | Instrument, cleavage agent, modifications (MS / UNIMOD) |
+| 6 Review & Create | Preview and generate the table into the main editor |
+
+Notes:
+
+- **`sampleCount`** = sum of biological replicates across conditions (distinct biological `source name`s) — not the number of conditions, and not the raw-file count
+- **Study factors** are defined on Step 2 (candidates) and assigned per sample on Step 3
+- AI suggestions appear as **cards**; nothing is written until you click Apply
+
+## AI features
+
+### 1. Editor recommendations (no backend)
+
+On an open table, use a browser-configured OpenAI / Anthropic / Gemini / Ollama key to suggest fixes and metadata improvements.
+
+Optional local example index for stronger suggestions:
 
 ```bash
 git clone https://github.com/bigbio/sdrf-annotated-datasets.git
 node scripts/build-sdrf-index.js ./sdrf-annotated-datasets/datasets
 ```
 
-## Embedding
+### 2. Wizard assistant (needs backend)
 
-The editor bundle is committed to `dist/` and served directly from GitHub through jsDelivr.
+The chat panel beside **Create New SDRF** supports:
+
+1. **ProteomeXchange accession (PXD…)** — fetch PRIDE metadata and raw names; prefer downloading the paper PDF and parsing it with MinerU into a session document, then propose Apply cards step by step  
+2. **Specification Q&A** — retrieve from a vector index of the [SDRF specification](https://sdrf.quantms.org/specification.html) with section citations  
+3. **Your own PDF or pasted methods** — upload or paste, then annotate the same way as (1)  
+
+Ontology values are verified server-side through EBI OLS so the model cannot invent accessions.
+
+## Validation
+
+| Mode | Description |
+|------|-------------|
+| PRIDE API | Default; calls the online SDRF validator |
+| Local browser | Runs `sdrf-pipelines` in the browser via Pyodide (`src/assets/wheels/`) |
+
+## Embedding (CDN)
+
+Embed the committed build (example points at this repo’s `main`; change branch/tag as needed):
 
 ```html
 <!DOCTYPE html>
@@ -60,48 +112,48 @@ The editor bundle is committed to `dist/` and served directly from GitHub throug
   <head>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/bigbio/sdrfedit@main/dist/sdrf-editor/browser/styles.css"
-    >
+      href="https://cdn.jsdelivr.net/gh/2024-denglei/sdrfedit@main/dist/sdrf-editor/browser/styles.css"
+    />
   </head>
   <body>
     <app-root></app-root>
-
     <script
-      src="https://cdn.jsdelivr.net/gh/bigbio/sdrfedit@main/dist/sdrf-editor/browser/polyfills.js"
+      src="https://cdn.jsdelivr.net/gh/2024-denglei/sdrfedit@main/dist/sdrf-editor/browser/polyfills.js"
       type="module"
     ></script>
     <script
-      src="https://cdn.jsdelivr.net/gh/bigbio/sdrfedit@main/dist/sdrf-editor/browser/main.js"
+      src="https://cdn.jsdelivr.net/gh/2024-denglei/sdrfedit@main/dist/sdrf-editor/browser/main.js"
       type="module"
     ></script>
   </body>
 </html>
 ```
 
-After changing the app, rebuild and commit `dist/` so the CDN version updates.
+After frontend changes, rebuild with `npm run build` and commit the updated `dist/`.
 
-## Project Structure
+## Project structure
 
 ```text
 src/
-├── app/
-│   ├── components/
-│   ├── core/
-│   └── workers/
-├── assets/
-└── index.html
+├── app/components/sdrf-editor/     # Main editor
+├── app/components/sdrf-wizard/     # Creation wizard
+├── app/components/wizard-ai-panel/ # Wizard AI chat panel
+├── app/core/services/              # Parse, validate, export, wizard state
+├── app/core/services/assistant/    # Assistant API + action bridge
+└── workers/                        # Pyodide and related workers
+backend/                            # Wizard AI FastAPI service
+├── app/llm/                        # Agent, prompts, streaming client
+├── app/parsing/                    # MinerU PDF parsing
+├── app/rag/                        # Spec chunking and retrieval
+├── app/tools/                      # PRIDE, literature, OLS, templates
+└── tests/
+sdrf-proteomics/                    # Local specification / template reference material
 ```
 
-Key areas:
+## Related projects
 
-- `src/app/components/sdrf-editor/`: main editor UI
-- `src/app/components/sdrf-wizard/`: creation wizard
-- `src/app/core/services/`: parsing, validation, export, AI, and cache services
-- `src/app/workers/pyodide.worker.ts`: local validation worker
-
-## Related Projects
-
-- [SDRF specification website](https://sdrf.quantms.org)
+- Upstream: [bigbio/sdrfedit](https://github.com/bigbio/sdrfedit)
+- [SDRF specification site](https://sdrf.quantms.org)
 - [proteomics-metadata-standard](https://github.com/bigbio/proteomics-metadata-standard)
 - [sdrf-pipelines](https://github.com/bigbio/sdrf-pipelines)
 - [sdrf-annotated-datasets](https://github.com/bigbio/sdrf-annotated-datasets)
@@ -112,9 +164,11 @@ Key areas:
 git checkout -b feature/my-change
 npm install
 npm run build
+# if you change the backend:
+cd backend && pytest
 ```
 
-Then commit your changes, include updated build artifacts when needed, and open a pull request.
+Commit your changes; if the frontend bundle changes, include the updated `dist/`.
 
 ## License
 

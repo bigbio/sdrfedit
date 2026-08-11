@@ -9,6 +9,7 @@ import {
   Input,
   inject,
   signal,
+  computed,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
@@ -24,6 +25,10 @@ import {
   COMMON_CLEAVAGE_AGENTS,
   MODIFICATION_POSITIONS,
   AMINO_ACIDS,
+  collectUsedPlexKitIds,
+  labelConfigDisplayName,
+  resolveRunLabelConfigId,
+  buildWizardExpansionRows,
 } from '../../../core/models/wizard';
 import { olsService } from '../../../core/services/ols.service';
 import { unimodService, UnimodEntry } from '../../../core/services/unimod.service';
@@ -40,6 +45,25 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
         <p class="step-description">
           Configure the mass spectrometer, enzyme, and post-translational modifications.
         </p>
+      </div>
+
+      <div class="summary-bar">
+        <div class="summary-item">
+          <span class="summary-label">MS runs</span>
+          <span class="summary-value">{{ runCount() }}</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">Kits</span>
+          <span class="summary-value">{{ kitsSummary() }}</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">Raw files</span>
+          <span class="summary-value">{{ fileCount() }}</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">SDRF rows</span>
+          <span class="summary-value">~{{ sdrfRowCount() }}</span>
+        </div>
       </div>
 
       <!-- Instrument Selection -->
@@ -119,6 +143,18 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
           </div>
         }
       </div>
+
+      @if (plexSuggestionLabel()) {
+        <div class="plex-suggest">
+          <div class="plex-suggest-text">
+            Runs &amp; Files used <strong>{{ plexSuggestionLabel() }}</strong>.
+            Add matching fixed mods on K and Any N-term?
+          </div>
+          <button type="button" class="btn-suggest" (click)="wizardState.addSuggestedPlexModifications()">
+            Add suggested mods
+          </button>
+        </div>
+      }
 
       <!-- Modifications -->
       <div class="form-section">
@@ -273,6 +309,15 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
         }
       </div>
 
+        @if (state().modifications.length === 0) {
+          <div class="mod-hint">
+            No modifications selected. Consider adding Carbamidomethyl (C, fixed) for typical bottom-up workflows.
+            <button type="button" class="hint-btn" (click)="addSuggestedCarbamidomethyl()">
+              Add Carbamidomethyl
+            </button>
+          </div>
+        }
+
       <!-- Validation Message -->
       @if (!wizardState.isStep5Valid()) {
         <div class="validation-message">
@@ -302,6 +347,44 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
       margin: 0;
       color: #6b7280;
       font-size: 14px;
+    }
+
+    .summary-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 16px;
+      padding: 10px 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      background: #f8fafc;
+    }
+    .summary-item { min-width: 88px; }
+    .summary-label { display: block; font-size: 11px; color: #64748b; }
+    .summary-value { font-size: 14px; font-weight: 650; color: #0f172a; }
+
+    .plex-suggest {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid #bae6fd;
+      background: #f0f9ff;
+    }
+    .plex-suggest-text { font-size: 13px; color: #0c4a6e; line-height: 1.4; }
+    .btn-suggest {
+      border: 1px solid #0284c7;
+      background: #0ea5e9;
+      color: #fff;
+      border-radius: 8px;
+      padding: 7px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
     }
 
     .form-section {
@@ -723,6 +806,32 @@ import { unimodService, UnimodEntry } from '../../../core/services/unimod.servic
       margin-top: 24px;
     }
 
+    .mod-hint {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+      margin-bottom: 8px;
+      padding: 12px 14px;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #1e40af;
+    }
+
+    .hint-btn {
+      border: 1px solid #93c5fd;
+      background: white;
+      color: #1d4ed8;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
     .warning-icon {
       width: 20px;
       height: 20px;
@@ -751,6 +860,33 @@ export class InstrumentProtocolComponent {
   private readonly unimod = unimodService;
 
   readonly state = this.wizardState.state;
+
+  readonly plexSuggestionLabel = computed(() => {
+    const kits = collectUsedPlexKitIds(this.state());
+    if (kits.length === 0) return null;
+    const labels = kits.map(id => {
+      if (id.startsWith('tmt16') || id.startsWith('tmt18') || id === 'tmt11' || id === 'tmt10') {
+        return 'TMTpro';
+      }
+      if (id.startsWith('tmt')) return 'TMT6plex';
+      if (id.startsWith('itraq4')) return 'iTRAQ4plex';
+      if (id.startsWith('itraq')) return 'iTRAQ8plex';
+      return labelConfigDisplayName(id);
+    });
+    return [...new Set(labels)].join(' + ');
+  });
+
+  readonly runCount = computed(() => (this.state().msRuns || []).length);
+  readonly fileCount = computed(() => this.state().dataFiles.length);
+  readonly sdrfRowCount = computed(() => buildWizardExpansionRows(this.state()).length);
+  readonly kitsSummary = computed(() => {
+    const s = this.state();
+    const runs = s.msRuns || [];
+    if (runs.length === 0) return labelConfigDisplayName(s.labelConfigId || 'lf');
+    const names = runs.map(r => labelConfigDisplayName(resolveRunLabelConfigId(r, s)));
+    return [...new Set(names)].join(' · ');
+  });
+
   readonly cleavageAgents = COMMON_CLEAVAGE_AGENTS;
   readonly positions = MODIFICATION_POSITIONS;
   readonly aminoAcids = AMINO_ACIDS;
@@ -843,6 +979,15 @@ export class InstrumentProtocolComponent {
     this.modSearch.set('');
     this.modResults.set([]);
     this.showModResults.set(false);
+  }
+
+  addSuggestedCarbamidomethyl(): void {
+    const carbamidomethyl = COMMON_MODIFICATIONS.find(
+      m => m.name === 'Carbamidomethyl' && m.targetAminoAcids === 'C'
+    );
+    if (carbamidomethyl && !this.isModSelected(carbamidomethyl)) {
+      this.wizardState.addModification({ ...carbamidomethyl });
+    }
   }
 
   private inferPosition(entry: UnimodEntry): ModificationPosition {

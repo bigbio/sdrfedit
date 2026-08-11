@@ -21,6 +21,7 @@ import {
   ViewChild,
   AfterViewInit,
   NgZone,
+  inject,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -43,6 +44,8 @@ import { SdrfWizardComponent } from '../sdrf-wizard/sdrf-wizard.component';
 import { ColumnEditorPanelComponent, BulkEditEvent as ColumnBulkEditEvent } from '../column-editor-panel/column-editor-panel.component';
 import { CacheRecoveryPanelComponent, RecoverCacheEvent } from '../cache-recovery-panel/cache-recovery-panel.component';
 import { TableCacheService, tableCacheService } from '../../core/services/table-cache.service';
+import { AssistantApiService } from '../../core/services/assistant/assistant-api.service';
+import { llmSettingsService } from '../../core/services/llm/settings.service';
 import { SdrfRecommendation } from '../../core/models/llm';
 import {
   PyodideValidatorService,
@@ -2253,7 +2256,7 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   @Input() readonly = false;
 
   /** Available templates for the creation wizard (defaults to common templates) */
-  @Input() availableWizardTemplates: string[] = ['human', 'cell-lines', 'vertebrates', 'invertebrates', 'plants', 'ms-proteomics', 'affinity-proteomics'];
+  @Input() availableWizardTemplates: string[] = [];
 
   // ============ Outputs ============
 
@@ -2510,6 +2513,8 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   private exporter = new SdrfExportService();
 
   private resizeObserver?: ResizeObserver;
+
+  private readonly assistantApi = inject(AssistantApiService);
 
   constructor(private ngZone: NgZone) {
     this.pyodideService = pyodideValidatorService;
@@ -4230,6 +4235,9 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
 
   openWizard(): void {
     this.showWizard.set(true);
+    // The wizard assistant lives on the backend, so re-probe it every time the
+    // wizard opens; the panel only appears once we know it is reachable.
+    void this.assistantApi.checkHealth();
   }
 
   closeWizard(): void {
@@ -4252,14 +4260,8 @@ export class SdrfEditorComponent implements OnInit, OnChanges, AfterViewInit, On
   }
 
   isAiConfigured(): boolean {
-    // Check if LLM settings are configured
-    const settings = localStorage.getItem('llm_settings');
-    if (!settings) return false;
-    try {
-      const parsed = JSON.parse(settings);
-      return !!(parsed.provider && (parsed.apiKey || parsed.provider === 'ollama'));
-    } catch {
-      return false;
-    }
+    // Two independent paths: the wizard assistant runs on the backend, while the
+    // editor's recommendation panel uses browser-side providers.
+    return this.assistantApi.available() || llmSettingsService.isAnyProviderConfigured();
   }
 }

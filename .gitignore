@@ -230,3 +230,16 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 node_modules
+
+# Wizard assistant backend (local env + generated index)
+backend/.env
+backend/.venv/
+backend/data/spec_index/
+backend/data/cellline_index/
+
+# Local LLM secrets / session artifacts (never commit API keys)
+**/llm.local.json
+.tmp-nginx/
+PXD*.pdf
+sdrf-agent-trace-*.json
+*.canvas.tsx

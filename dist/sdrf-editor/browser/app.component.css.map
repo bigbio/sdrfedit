@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["angular:styles/component:css;d90187af25b498241cee6de0717cde2d905c45d46342bc6902662932929eab0c;/home/denglei/projects/sdrfedit/src/app/app.component.ts"],
+  "sourcesContent": ["\n    .app-container {\n      display: flex;\n      flex-direction: column;\n      height: 100vh;\n    }\n\n    .app-main {\n      flex: 1;\n      display: flex;\n      flex-direction: column;\n      overflow: hidden;\n    }\n\n    sdrf-editor-table {\n      display: block;\n      height: 100%;\n    }\n  "],
+  "mappings": ";AACI,CAAC;AACC,WAAS;AACT,kBAAgB;AAChB,UAAQ;AACV;AAEA,CAAC;AACC,QAAM;AACN,WAAS;AACT,kBAAgB;AAChB,YAAU;AACZ;AAEA;AACE,WAAS;AACT,UAAQ;AACV;",
+  "names": []
+}
