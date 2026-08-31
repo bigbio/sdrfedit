@@ -55,6 +55,7 @@ import {
   WizardAiBridgeService,
 } from '../../core/services/assistant/wizard-ai-bridge.service';
 import { WizardStateService } from '../../core/services/wizard-state.service';
+import { resolveAssistantNavigation } from '../../core/utils/wizard-navigation';
 import { ActionCardListComponent } from './action-card-list.component';
 import { renderMarkdownLite } from './markdown-lite';
 import { ToolCallBlockComponent } from './tool-call-list.component';
@@ -117,7 +118,7 @@ const DEFAULT_WIDTH = 400;
             </button>
           }
           <button
-            class="icon-btn"
+            class="icon-btn collapse-btn"
             (click)="toggleCollapsed()"
             [title]="collapsed() ? 'Expand assistant' : 'Collapse assistant'"
           >
@@ -1339,6 +1340,21 @@ const DEFAULT_WIDTH = 400;
     }
     .btn-secondary:hover:not(:disabled) { background: #f4f6fb; }
     .btn-secondary:disabled { color: #b0b6c1; cursor: default; }
+
+    @media (max-width: 1023px) {
+      :host { width: 100%; height: 100dvh; }
+      .ai-panel,
+      .ai-panel.collapsed {
+        width: 100% !important;
+        height: 100dvh;
+        border-radius: 0;
+        box-shadow: none;
+      }
+      .resizer { display: none; }
+      .panel-header { padding-top: calc(11px + env(safe-area-inset-top)); }
+      .collapse-btn { display: none; }
+      .composer { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+    }
   `],
 })
 export class WizardAiPanelComponent implements OnInit, OnDestroy {
@@ -1773,11 +1789,16 @@ export class WizardAiPanelComponent implements OnInit, OnDestroy {
 
   /** The "Continue" button under a turn: move the wizard on, then advise. */
   goNext(hint: AssistantNextStep): void {
-    if (this.wizardState.currentStep() + 1 === hint.index && this.wizardState.canProceed()) {
-      this.wizardState.nextStep();
-    } else {
-      this.wizardState.goToStep(hint.index);
-    }
+    const currentStep = this.wizardState.currentStep();
+    const decision = resolveAssistantNavigation(
+      currentStep,
+      hint.index,
+      this.wizardState.canProceed(),
+      this.totalSteps
+    );
+    if (decision === 'stay') return;
+    if (decision === 'next') this.wizardState.nextStep();
+    else this.wizardState.goToStep(hint.index);
     // The step effect picks the new step up, unless it was already advised.
     void this.adviseStep(hint.index);
   }

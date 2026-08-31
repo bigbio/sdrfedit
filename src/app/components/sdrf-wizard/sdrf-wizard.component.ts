@@ -46,8 +46,12 @@ import { WizardAiPanelComponent } from '../wizard-ai-panel/wizard-ai-panel.compo
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="wizard-overlay" (click)="onOverlayClick($event)">
-      <div class="wizard-shell" (click)="$event.stopPropagation()">
+    <div class="wizard-overlay">
+      <div
+        class="wizard-shell"
+        [class.ai-open]="aiEnabled && showAiPanel()"
+        (click)="$event.stopPropagation()"
+      >
       <div class="wizard-container">
         <!-- Header -->
         <div class="wizard-header">
@@ -433,6 +437,33 @@ import { WizardAiPanelComponent } from '../wizard-ai-panel/wizard-ai-panel.compo
     .btn-create:hover:not(:disabled) {
       background: #059669;
     }
+
+    @media (max-width: 1023px) {
+      .wizard-overlay { align-items: stretch; background: white; }
+      .wizard-shell {
+        width: 100vw;
+        max-width: none;
+        height: 100dvh;
+        max-height: none;
+        gap: 0;
+      }
+      .wizard-container {
+        width: 100%;
+        flex-basis: 100%;
+        border-radius: 0;
+        box-shadow: none;
+      }
+      .wizard-shell.ai-open .wizard-container { display: none; }
+      wizard-ai-panel { width: 100%; flex: 1 1 100%; }
+      .wizard-header { padding: 14px 16px; }
+      .wizard-progress { padding: 12px 16px; }
+      .wizard-content { padding: 16px; }
+      .wizard-footer {
+        padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+        border-radius: 0;
+      }
+      .btn { min-height: 44px; padding: 9px 18px; }
+    }
   `],
 })
 export class SdrfWizardComponent implements OnInit {
@@ -441,8 +472,8 @@ export class SdrfWizardComponent implements OnInit {
   @Output() complete = new EventEmitter<SdrfTable>();
   @Output() cancel = new EventEmitter<void>();
 
-  /** The assistant starts docked so its capabilities are discoverable. */
-  readonly showAiPanel = signal(true);
+  /** Desktop starts docked; mobile starts with the form and opens AI on demand. */
+  readonly showAiPanel = signal(!isMobileViewport());
 
   readonly wizardState = inject(WizardStateService);
   private readonly generator = inject(WizardGeneratorService);
@@ -465,12 +496,6 @@ export class SdrfWizardComponent implements OnInit {
     }
   }
 
-  onOverlayClick(event: Event): void {
-    if (event.target === event.currentTarget) {
-      this.onCancel();
-    }
-  }
-
   onCancel(): void {
     // Explicit dismiss — drop the draft so reopen starts clean. Chat text remains.
     this.chatHistory.clearActiveWizard();
@@ -488,4 +513,12 @@ export class SdrfWizardComponent implements OnInit {
     this.chatHistory.clearActiveWizard();
     this.wizardState.reset();
   }
+}
+
+function isMobileViewport(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(max-width: 1023px)').matches
+  );
 }
