@@ -39,3 +39,13 @@ AI 返回的 `nextStep` 只作为导航建议，前端必须再次判断：
 - 纯函数测试覆盖：正常前进、校验失败、返回、跨步和越界目标。
 - Angular 生产构建用于检查组件模板、样式及 TypeScript 集成。
 - 手工验收建议覆盖 `390x844`、`768x1024` 和常见桌面宽度。
+
+## 服务器发布
+
+Nginx 直接提供 `/www/wwwroot/www.sdrf.site` 中的前端文件，并将 `/api/`
+代理到本机 AI 服务。提交新的 `dist/**` 后，`deploy-frontend.yml` 通过 SSH
+连接服务器；只有工作树无 tracked 改动且能 fast-forward 时才更新仓库，然后
+运行 `scripts/deploy-frontend.sh`。脚本复制构建产物后检查首页和 `/api/health`。
+
+`build-dist.yml` 生成的 dist-only 提交不再包含 `[skip ci]`，因此也会触发上述
+部署流程；该工作流本身不监听 `dist/**`，不会形成递归构建。

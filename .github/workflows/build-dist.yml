@@ -52,5 +52,7 @@ jobs:
             echo 'dist/ is already up to date'
             exit 0
           fi
-          git commit -m 'chore: rebuild dist [skip ci]'
+          # A normal dist-only commit triggers deploy-frontend.yml. build-dist
+          # itself only watches source/config paths, so this cannot recurse.
+          git commit -m 'chore: rebuild dist'
           git push

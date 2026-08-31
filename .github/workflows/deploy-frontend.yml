@@ -1,0 +1,35 @@
+name: Deploy frontend to server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dist/**'
+      - '.github/workflows/deploy-frontend.yml'
+      - 'scripts/deploy-frontend.sh'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-frontend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd /opt/sdrfedit
+            git -c safe.directory=/opt/sdrfedit fetch origin main
+            git -c safe.directory=/opt/sdrfedit diff --quiet
+            git -c safe.directory=/opt/sdrfedit diff --cached --quiet
+            git -c safe.directory=/opt/sdrfedit merge --ff-only origin/main
+            bash /opt/sdrfedit/scripts/deploy-frontend.sh
