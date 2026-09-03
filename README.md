@@ -1,7 +1,7 @@
 # SDRF Editor
 
-[![License](https://img.shields.io/github/license/2024-denglei/sdrfedit)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/2024-denglei/sdrfedit?style=social)](https://github.com/2024-denglei/sdrfedit/stargazers)
+[License](LICENSE)
+[GitHub stars](https://github.com/2024-denglei/sdrfedit/stargazers)
 
 Browser-based editor for the Sample and Data Relationship Format (SDRF): create, edit, validate, and export proteomics sample–data relationship tables. This fork builds on [bigbio/sdrfedit](https://github.com/bigbio/sdrfedit) with an improved **6-step creation wizard** and an optional **wizard AI assistant**.
 
@@ -24,7 +24,7 @@ npm install
 ng serve
 ```
 
-Open http://localhost:4200 .
+Open [http://localhost:4200](http://localhost:4200) .
 
 Production build:
 
@@ -53,22 +53,24 @@ Health check:
 curl http://127.0.0.1:8000/api/health
 ```
 
-The frontend connects via `assistantBaseUrl` in `src/environments/environment.ts`. Embedded deployments can override with `window.__SDRF_ASSISTANT_URL__` or `localStorage.sdrf_assistant_url`. See [backend/README.md](backend/README.md) for LLM, embedding, and MinerU configuration.
+The frontend connects via `assistantBaseUrl` in `src/environments/environment.ts` (default `http://localhost:8000`). With the backend running on this machine, the assistant panel also appears in the official editor at [https://sdrf.quantms.org/sdrf-editor.html](https://sdrf.quantms.org/sdrf-editor.html). Embedded deployments can override the URL with `window.__SDRF_ASSISTANT_URL__` or `localStorage.sdrf_assistant_url`. See [backend/README.md](backend/README.md) for LLM, embedding, MinerU, and CORS configuration.
 
 ## Creation wizard (6 steps)
 
-| Step | What you fill |
-|------|----------------|
-| 1 Experiment Setup | Technology / sample / experiment templates + **biological sample count** |
-| 2 Sample Characteristics | Characteristic candidate values + **study factor names and all group labels** |
-| 3 Sample Values | Source names, biological replicates, multi-value characteristics, **per-sample factor picks** |
-| 4 Runs & Files | Plex kit, MS-run packing, raw-file pool, **file→run mapping with fraction / tech** |
-| 5 Instrument & Protocol | Instrument, cleavage agent, modifications (MS / UNIMOD) |
-| 6 Review & Create | Preview and generate the table into the main editor |
+
+| Step                     | What you fill                                                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------------- |
+| 1 Experiment Setup       | Technology / sample / experiment templates + **biological sample count**                      |
+| 2 Sample Characteristics | Characteristic candidate values + **study factor names and all group labels**                 |
+| 3 Sample Values          | Source names, biological replicates, multi-value characteristics, **per-sample factor picks** |
+| 4 Runs & Files           | Plex kit, MS-run packing, raw-file pool, **file→run mapping with fraction / tech**            |
+| 5 Instrument & Protocol  | Instrument, cleavage agent, modifications (MS / UNIMOD)                                       |
+| 6 Review & Create        | Preview and generate the table into the main editor                                           |
+
 
 Notes:
 
-- **`sampleCount`** = sum of biological replicates across conditions (distinct biological `source name`s) — not the number of conditions, and not the raw-file count
+- `**sampleCount**` = sum of biological replicates across conditions (distinct biological `source name`s) — not the number of conditions, and not the raw-file count
 - **Study factors** are defined on Step 2 (candidates) and assigned per sample on Step 3
 - AI suggestions appear as **cards**; nothing is written until you click Apply
 
@@ -89,18 +91,20 @@ node scripts/build-sdrf-index.js ./sdrf-annotated-datasets/datasets
 
 The chat panel beside **Create New SDRF** supports:
 
-1. **ProteomeXchange accession (PXD…)** — fetch PRIDE metadata and raw names; prefer downloading the paper PDF and parsing it with MinerU into a session document, then propose Apply cards step by step  
-2. **Specification Q&A** — retrieve from a vector index of the [SDRF specification](https://sdrf.quantms.org/specification.html) with section citations  
-3. **Your own PDF or pasted methods** — upload or paste, then annotate the same way as (1)  
+1. **ProteomeXchange accession (PXD…)** — fetch PRIDE metadata and raw names; prefer downloading the paper PDF and parsing it with MinerU into a session document, then propose Apply cards step by step
+2. **Specification Q&A** — retrieve from a vector index of the [SDRF specification](https://sdrf.quantms.org/specification.html) with section citations
+3. **Your own PDF or pasted methods** — upload or paste, then annotate the same way as (1)
 
 Ontology values are verified server-side through EBI OLS so the model cannot invent accessions.
 
 ## Validation
 
-| Mode | Description |
-|------|-------------|
-| PRIDE API | Default; calls the online SDRF validator |
+
+| Mode          | Description                                                             |
+| ------------- | ----------------------------------------------------------------------- |
+| PRIDE API     | Default; calls the online SDRF validator                                |
 | Local browser | Runs `sdrf-pipelines` in the browser via Pyodide (`src/assets/wheels/`) |
+
 
 ## Embedding (CDN)
 

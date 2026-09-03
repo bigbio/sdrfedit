@@ -17,24 +17,84 @@ import {
 
 const RUNTIME_OVERRIDE_KEY = 'sdrf_assistant_url';
 
+/** Extra origins to try when the page is opened via IP or domain. */
+const HOSTED_ASSISTANT_ORIGINS = [
+  'http://47.93.36.196',
+  'http://www.sdrf.site',
+  'https://www.sdrf.site',
+];
+
+function normalizeOrigin(url: string): string {
+  return url.trim().replace(/\/$/, '');
+}
+
+function asOriginList(value: unknown): string[] {
+  if (typeof value === 'string' && value.trim()) {
+    return value.split(',').map(normalizeOrigin).filter(Boolean);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === 'string')
+      .map(normalizeOrigin)
+      .filter(Boolean);
+  }
+  return [];
+}
+
+/**
+ * HTTPS pages may only call HTTP backends on loopback (the official editor +
+ * local uvicorn pattern). Other http:// origins are mixed content and must be
+ * skipped or the browser blocks them.
+ */
+function isUsableAssistantOrigin(url: string): boolean {
+  if (typeof location === 'undefined' || location.protocol !== 'https:') return true;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'https:') return true;
+    return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Candidate backend origins, in preference order.
+ * Same-origin (IP or domain) is tried first so one deployment works both ways.
+ */
+export function assistantUrlCandidates(): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (url: string) => {
+    const origin = normalizeOrigin(url);
+    if (!origin || seen.has(origin) || !isUsableAssistantOrigin(origin)) return;
+    seen.add(origin);
+    out.push(origin);
+  };
+
+  const global = globalThis as Record<string, unknown>;
+  for (const url of asOriginList(global['__SDRF_ASSISTANT_URLS__'])) add(url);
+  for (const url of asOriginList(global['__SDRF_ASSISTANT_URL__'])) add(url);
+
+  try {
+    const stored = localStorage.getItem(RUNTIME_OVERRIDE_KEY);
+    if (stored) add(stored);
+  } catch {
+    // Storage can be blocked in embedded iframes; fall through.
+  }
+
+  if (typeof location !== 'undefined' && location.origin) add(location.origin);
+
+  for (const url of HOSTED_ASSISTANT_ORIGINS) add(url);
+  add(environment.assistantBaseUrl || '');
+  return out;
+}
+
 /**
  * Resolve the backend origin. CDN-embedded deployments cannot rebuild, so a
  * runtime override wins over the compiled default.
  */
 export function resolveAssistantBaseUrl(): string {
-  const globalOverride = (globalThis as Record<string, unknown>)['__SDRF_ASSISTANT_URL__'];
-  if (typeof globalOverride === 'string' && globalOverride.trim()) {
-    return globalOverride.trim().replace(/\/$/, '');
-  }
-
-  try {
-    const stored = localStorage.getItem(RUNTIME_OVERRIDE_KEY);
-    if (stored && stored.trim()) return stored.trim().replace(/\/$/, '');
-  } catch {
-    // Storage can be blocked in embedded iframes; fall through to the default.
-  }
-
-  return (environment.assistantBaseUrl || '').replace(/\/$/, '');
+  return assistantUrlCandidates()[0] || '';
 }
 
 @Injectable({ providedIn: 'root' })
@@ -42,6 +102,7 @@ export class AssistantApiService {
   private readonly _health = signal<AssistantHealth | null>(null);
   private readonly _available = signal(false);
   private readonly _checked = signal(false);
+  private resolvedBaseUrl = '';
   private controller: AbortController | null = null;
 
   /** Last health report, or null if the backend has not answered yet. */
@@ -54,10 +115,11 @@ export class AssistantApiService {
   readonly checked = this._checked.asReadonly();
 
   get baseUrl(): string {
-    return resolveAssistantBaseUrl();
+    return this.resolvedBaseUrl || resolveAssistantBaseUrl();
   }
 
   setBaseUrl(url: string): void {
+    this.resolvedBaseUrl = url.trim().replace(/\/$/, '');
     try {
       if (url.trim()) localStorage.setItem(RUNTIME_OVERRIDE_KEY, url.trim());
       else localStorage.removeItem(RUNTIME_OVERRIDE_KEY);
@@ -66,31 +128,38 @@ export class AssistantApiService {
     }
   }
 
-  async checkHealth(timeoutMs = 4000): Promise<AssistantHealth | null> {
-    const base = this.baseUrl;
-    if (!base) {
+  async checkHealth(timeoutMs = 2500): Promise<AssistantHealth | null> {
+    const candidates = assistantUrlCandidates();
+    if (!candidates.length) {
       this._checked.set(true);
       this._available.set(false);
       return null;
     }
 
-    const abort = new AbortController();
-    const timer = setTimeout(() => abort.abort(), timeoutMs);
-    try {
-      const response = await fetch(`${base}/api/health`, { signal: abort.signal });
-      if (!response.ok) throw new Error(`Health check failed (${response.status})`);
-      const health = (await response.json()) as AssistantHealth;
-      this._health.set(health);
-      this._available.set(!!health.llmConfigured);
-      return health;
-    } catch {
-      this._health.set(null);
-      this._available.set(false);
-      return null;
-    } finally {
-      clearTimeout(timer);
-      this._checked.set(true);
+    for (const base of candidates) {
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(), timeoutMs);
+      try {
+        const response = await fetch(`${base}/api/health`, { signal: abort.signal });
+        if (!response.ok) continue;
+        const health = (await response.json()) as AssistantHealth;
+        if (!health.llmConfigured) continue;
+        this.resolvedBaseUrl = base;
+        this._health.set(health);
+        this._available.set(true);
+        this._checked.set(true);
+        return health;
+      } catch {
+        // Try the next origin (current page, IP, then domain).
+      } finally {
+        clearTimeout(timer);
+      }
     }
+
+    this._health.set(null);
+    this._available.set(false);
+    this._checked.set(true);
+    return null;
   }
 
   abort(): void {

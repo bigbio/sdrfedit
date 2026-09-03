@@ -17,7 +17,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    cors_origins: str = "http://localhost:4200,http://127.0.0.1:4200"
+    cors_origins: str = (
+        "http://localhost:4200,http://127.0.0.1:4200,https://sdrf.quantms.org"
+    )
 
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""

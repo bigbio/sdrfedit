@@ -1,0 +1,34 @@
+name: Deploy backend to server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'sdrf-proteomics/**'
+      - '.github/workflows/deploy-backend.yml'
+      - 'scripts/deploy-backend.sh'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd /opt/sdrfedit
+            git -c safe.directory=/opt/sdrfedit fetch origin main
+            git -c safe.directory=/opt/sdrfedit reset --hard origin/main
+            bash /opt/sdrfedit/scripts/deploy-backend.sh

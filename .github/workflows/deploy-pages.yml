@@ -1,0 +1,104 @@
+name: Deploy editor to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      base_href:
+        description: 'Base href of the published site (use "/" for a custom domain)'
+        required: false
+        default: '/sdrfedit/'
+
+# The published site is a preview of the editor. The copy embedded in
+# https://sdrf.quantms.org is served from dist/ over jsDelivr instead
+# (see build-dist.yml).
+#
+# GitHub Pages is HTTPS, so the assistant backend must also be HTTPS
+# (set repo variable/secret ASSISTANT_BASE_URL). Mixed content to
+# http://IP is blocked by the browser.
+env:
+  BASE_HREF: ${{ github.event.inputs.base_href || '/sdrfedit/' }}
+  ASSISTANT_BASE_URL: ${{ vars.ASSISTANT_BASE_URL || secrets.ASSISTANT_BASE_URL || 'https://www.sdrf.site' }}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # package-lock.json is intentionally gitignored, so npm ci and
+      # setup-node's built-in cache (both need a lockfile) are not usable.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: npm-${{ runner.os }}-
+
+      - run: npm install --no-audit --no-fund
+
+      - name: Build
+        run: npx ng build --configuration production --base-href "$BASE_HREF"
+
+      - name: Point the preview at the hosted assistant backend
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          url = (os.environ.get("ASSISTANT_BASE_URL") or "").strip().rstrip("/")
+          path = Path("dist/sdrf-editor/browser/index.html")
+          html = path.read_text(encoding="utf-8")
+          if not url:
+              print("ASSISTANT_BASE_URL is empty; leaving compiled default")
+              raise SystemExit(0)
+          urls = [url, "http://www.sdrf.site", "http://47.93.36.196"]
+          seen = []
+          for item in urls:
+              item = (item or "").strip().rstrip("/")
+              if item and item not in seen:
+                  seen.append(item)
+          snippet = (
+              "<script>"
+              f"window.__SDRF_ASSISTANT_URLS__ = {seen!r};"
+              "</script>"
+          )
+          needle = "<sdrf-editor></sdrf-editor>"
+          if needle not in html:
+              raise SystemExit("could not find <sdrf-editor> in index.html")
+          if "__SDRF_ASSISTANT_URLS__" not in html and "__SDRF_ASSISTANT_URL__" not in html:
+              html = html.replace(needle, needle + "\n  " + snippet, 1)
+              path.write_text(html, encoding="utf-8")
+          print(f"assistant backend: {url}")
+          PY
+
+      - name: Add SPA fallback
+        run: cp dist/sdrf-editor/browser/index.html dist/sdrf-editor/browser/404.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/sdrf-editor/browser
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

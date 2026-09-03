@@ -65,7 +65,13 @@ curl http://localhost:8000/api/health
 
 The frontend reads this endpoint and only shows the assistant panel when the
 backend is reachable and `llmConfigured` is true. Point the frontend at the
-backend with `assistantBaseUrl` in `src/environments/environment.ts`.
+backend with `assistantBaseUrl` in `src/environments/environment.ts`
+(default `http://localhost:8000`).
+
+The same local process also works with the official editor at
+https://sdrf.quantms.org/sdrf-editor.html: the browser calls `localhost:8000`
+from that HTTPS page. `CORS_ORIGINS` must include `https://sdrf.quantms.org`
+(already the default in `.env.example`). Add any other hosted origin you use.
 
 ## Configuration
 

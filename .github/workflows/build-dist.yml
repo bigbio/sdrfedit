@@ -1,0 +1,58 @@
+name: Refresh committed dist
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'angular.json'
+      - 'package.json'
+      - 'tsconfig*.json'
+  workflow_dispatch:
+
+# dist/ is committed so jsDelivr can serve the editor to
+# https://sdrf.quantms.org/sdrf-editor.html. Keeping it in sync by hand is
+# easy to forget, so rebuild and commit it here after every source change.
+permissions:
+  contents: write
+
+concurrency:
+  group: build-dist
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # package-lock.json is intentionally gitignored, so npm ci and
+      # setup-node's built-in cache (both need a lockfile) are not usable.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: npm-${{ runner.os }}-
+
+      - run: npm install --no-audit --no-fund
+
+      - name: Build
+        run: npx ng build --configuration production
+
+      - name: Commit dist if it changed
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add dist
+          if git diff --cached --quiet; then
+            echo 'dist/ is already up to date'
+            exit 0
+          fi
+          # A normal dist-only commit triggers deploy-frontend.yml. build-dist
+          # itself only watches source/config paths, so this cannot recurse.
+          git commit -m 'chore: rebuild dist'
+          git push
