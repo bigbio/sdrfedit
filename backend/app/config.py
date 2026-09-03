@@ -21,6 +21,10 @@ class Settings(BaseSettings):
         "http://localhost:4200,http://127.0.0.1:4200,https://sdrf.quantms.org"
     )
 
+    # Set when served behind a path-prefixing ingress (e.g. /pride/services/sdrf-assistant)
+    # so FastAPI generates correct docs/openapi URLs.
+    root_path: str = ""
+
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
