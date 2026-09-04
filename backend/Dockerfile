@@ -19,7 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# UID/GID pinned to 1000 to match runAsUser/runAsGroup/fsGroup in
+# backend/k8s/deployment.yaml -- otherwise the container runs as 1000 while
+# these files are owned by appuser's arbitrary auto-assigned UID, and the
+# entrypoint's index-build step fails with a permission error.
+RUN groupadd -r -g 1000 appuser && useradd -r -u 1000 -g appuser appuser
 
 # Install Python dependencies first for better layer caching.
 COPY backend/requirements.txt backend/requirements.txt
