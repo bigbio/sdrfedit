@@ -1,4 +1,4 @@
-name: Backend - Build and Push to GitHub Container Registry
+name: Frontend - Build and Push to GitHub Container Registry
 
 on:
   push:
@@ -7,14 +7,16 @@ on:
     # only moves on a push to main).
     branches: [ main, pride-deploy ]
     paths:
-      - "backend/**"
-      - "sdrf-proteomics/cl-annotations-db.tsv"
-      - "sdrf-proteomics/ai-synonyms.tsv"
-      - ".github/workflows/backend-build-and-push.yml"
+      - "src/**"
+      - "angular.json"
+      - "package.json"
+      - "tsconfig*.json"
+      - "frontend/**"
+      - ".github/workflows/frontend-build-and-push.yml"
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: bigbio/sdrfedit-backend
+  IMAGE_NAME: bigbio/sdrfedit-frontend
 
 jobs:
   build-and-push:
@@ -51,10 +53,10 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          # Build context is the repo root: the backend reads cell-line
-          # reference tables from the sibling sdrf-proteomics/ directory.
+          # Build context is the repo root: the frontend needs
+          # package.json/angular.json/src/ at the top level.
           context: .
-          file: backend/Dockerfile
+          file: frontend/Dockerfile
           platforms: linux/amd64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
