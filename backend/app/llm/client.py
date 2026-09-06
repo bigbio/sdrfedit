@@ -100,6 +100,14 @@ class LlmClient:
                     except json.JSONDecodeError:
                         continue
 
+                    # Some gateways (e.g. pride-llm-api) answer 200 and stream an
+                    # error as a chunk rather than failing the initial response --
+                    # surface it instead of silently producing an empty answer.
+                    error = chunk.get("error")
+                    if error:
+                        detail = error.get("message") if isinstance(error, dict) else str(error)
+                        raise LlmError(f"LLM stream error: {(detail or '')[:400]}")
+
                     choices = chunk.get("choices") or []
                     if not choices:
                         continue

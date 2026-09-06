@@ -124,38 +124,38 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
     focus_step = resolve_focus_step(request)
     skill = _resolve_skill(request)
 
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": render_wizard_context(request.wizardState)},
-        {"role": "system", "content": render_step_focus(focus_step, request.wizardState)},
+    # Collected as parts and joined into ONE system message below -- some
+    # OpenAI-compatible backends (e.g. vLLM's default chat template) reject a
+    # messages array with more than one system-role entry ("System message
+    # must be at the beginning"), so multiple leading system messages is not
+    # a portable shape even though OpenAI itself tolerates it.
+    system_parts: list[str] = [
+        SYSTEM_PROMPT,
+        render_wizard_context(request.wizardState),
+        render_step_focus(focus_step, request.wizardState),
     ]
 
     if skill:
-        messages.append(
-            {
-                "role": "system",
-                "content": (
-                    f"The user invoked the /{skill.name} skill"
-                    + (f" with arguments: {skill.args}" if skill.args else "")
-                    + ".\n\n"
-                    + skill.instructions
-                ),
-            }
+        system_parts.append(
+            f"The user invoked the /{skill.name} skill"
+            + (f" with arguments: {skill.args}" if skill.args else "")
+            + ".\n\n"
+            + skill.instructions
         )
         yield AgentEvent.status(f"Running /{skill.name}")
 
     evidence = render_evidence([note.text for note in store.get_evidence(request.sessionId)])
     if evidence:
-        messages.append({"role": "system", "content": evidence})
+        system_parts.append(evidence)
 
     accession = request.accession or (skill.accession if skill else None)
     if accession:
-        messages.append(
-            {
-                "role": "system",
-                "content": f"The panel reports the user is working with accession {accession}.",
-            }
-        )
+        system_parts.append(f"The panel reports the user is working with accession {accession}.")
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "\n\n".join(part for part in system_parts if part.strip())}
+    ]
+
     history = request.messages[-MAX_HISTORY_MESSAGES:]
     for index, message in enumerate(history):
         content = message.content
@@ -304,7 +304,10 @@ async def run_agent(request: ChatRequest) -> AsyncGenerator[AgentEvent, None]:
             yield AgentEvent.status("Wrapping up — proposing cards from verified evidence")
             messages.append(
                 {
-                    "role": "system",
+                    # "user", not "system": some backends (e.g. vLLM's default chat
+                    # template) reject a system-role message anywhere but the very
+                    # first position ("System message must be at the beginning").
+                    "role": "user",
                     "content": (
                         "Ontology / evidence tool rounds are exhausted. "
                         "You MUST call propose_wizard_actions NOW for the current focus step, "
